@@ -368,9 +368,48 @@
     if (!root) return [];
     var nodes = Array.from(root.querySelectorAll('h1, h2, h3, h4, h5, h6'));
     return nodes.filter(function (el) {
-      var text = el.textContent.trim();
+      var text = getHeadingText(el);
       return text.length > 0 && text.length < 300;
     });
+  }
+
+  // 获取标题文本，兼容沉浸式翻译等插件
+  function getHeadingText(el) {
+    // 1. 沉浸式翻译: 翻译结果在 .immersive-translate-target-wrapper 里
+    var itTarget = el.querySelector('.immersive-translate-target-wrapper .immersive-translate-target');
+    if (itTarget && itTarget.textContent.trim()) {
+      return itTarget.textContent.trim();
+    }
+    // 兼容旧版沉浸式翻译
+    var itTarget2 = el.querySelector('.immersive-translate-target');
+    if (itTarget2 && itTarget2.textContent.trim()) {
+      return itTarget2.textContent.trim();
+    }
+    // 2. 沉浸式翻译: 原文可能被隐藏 (visibility:hidden), 翻译文本可见
+    var children = el.children;
+    for (var i = 0; i < children.length; i++) {
+      var child = children[i];
+      var cls = child.className || '';
+      if (cls.indexOf('immersive-translate') !== -1 && child.textContent.trim()) {
+        var style = window.getComputedStyle(child);
+        if (style.display !== 'none') {
+          return child.textContent.trim();
+        }
+      }
+    }
+    // 3. 如果原文被隐藏，找第一个可见的子文本
+    var allChildren = el.querySelectorAll('*');
+    for (var j = 0; j < allChildren.length; j++) {
+      var c = allChildren[j];
+      if (c.textContent.trim() && c.children.length === 0) {
+        var s = window.getComputedStyle(c);
+        if (s.display !== 'none' && s.visibility !== 'hidden') {
+          return c.textContent.trim();
+        }
+      }
+    }
+    // 4. 回退到 textContent
+    return el.textContent.trim();
   }
 
   function ensureId(el, idx) {
@@ -554,7 +593,7 @@
     headingData = headings.map(function (el, idx) {
       return {
         level: parseInt(el.tagName[1]),
-        text: el.textContent.trim(),
+        text: getHeadingText(el),
         id: ensureId(el, idx),
         el: el
       };
