@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         网页目录阅读器 (TOC Reader)
 // @namespace    https://github.com/JBC-JJM/chrome-toc-extension
-// @version      1.6.0
-// @description  自动提取网页标题结构，生成悬浮目录面板，支持点击跳转、折叠展开、拖拽移动、智能主题、百度翻译
+// @version      1.7.0
+// @description  自动提取网页标题结构，生成悬浮目录面板，支持点击跳转、折叠展开、拖拽移动、智能主题
 // @author       JBC-JJM
 // @match        *://*/*
 // @grant        GM_addStyle
@@ -10,9 +10,6 @@
 // @grant        GM_getValue
 // @grant        GM_registerMenuCommand
 // @grant        GM_unregisterMenuCommand
-// @grant        GM_xmlhttpRequest
-// @connect      fanyi-api.baidu.com
-// @connect      fanyi.baidu.com
 // @run-at       document-idle
 // @require      https://cdnjs.cloudflare.com/ajax/libs/tocbot/4.18.2/tocbot.min.js
 // ==/UserScript==
@@ -29,11 +26,6 @@
   const COLLAPSE_KEY = 'toc_reader_collapse';
   const SIZE_KEY = 'toc_reader_size';
   const TOGGLE_POS_KEY = 'toc_reader_toggle_pos';
-  const BAIDU_APPID_KEY = 'toc_reader_baidu_appid';
-  const BAIDU_SECRETKEY_KEY = 'toc_reader_baidu_secretkey';
-
-  let isTranslated = false;
-  let translatedData = {};
 
   // ─── 站点特定配置 ────────────────────────────────────────────────────────────
   const SITE_SETTINGS = {
@@ -118,7 +110,7 @@
       display: flex;
       flex-direction: column;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-      font-size: 13px;
+      font-size: 14px;
       color: var(--toc-text, #1f2937);
       overflow: hidden;
       transition: opacity 0.25s cubic-bezier(.4,0,.2,1), transform 0.25s cubic-bezier(.4,0,.2,1), background 0.3s, border-color 0.3s;
@@ -140,8 +132,6 @@
       --toc-active-color: #a5b4fc;
       --toc-header-bg: linear-gradient(135deg, #312e81, #4338ca);
       --toc-scrollbar: #374151;
-      --toc-overlay: rgba(0,0,0,0.6);
-      --toc-modal-bg: #1f2237;
     }
 
     /* ── 亮色主题变量 ── */
@@ -155,8 +145,6 @@
       --toc-active-color: #4f46e5;
       --toc-header-bg: linear-gradient(135deg, #6366f1, #8b5cf6);
       --toc-scrollbar: #e5e7eb;
-      --toc-overlay: rgba(0,0,0,0.35);
-      --toc-modal-bg: #ffffff;
     }
 
     /* ── 自定义调整大小手柄 ── */
@@ -253,7 +241,7 @@
       padding: 2px 10px 2px;
       cursor: pointer;
       color: var(--toc-text, #1f2937);
-      line-height: 1.4;
+      line-height: 1.5;
       font-size: 12px;
       transition: all 0.12s ease;
       border-left: 2.5px solid transparent;
@@ -311,12 +299,12 @@
     .toc-item[data-level="5"] .toc-level-dot { background: #e879f9; width: 3px; height: 3px; }
     .toc-item[data-level="6"] .toc-level-dot { background: #f472b6; width: 3px; height: 3px; }
 
-    .toc-item[data-level="1"] { padding-left: 10px; font-size: 12.5px; font-weight: 600; }
-    .toc-item[data-level="2"] { padding-left: 18px; }
-    .toc-item[data-level="3"] { padding-left: 24px; font-size: 11.5px; }
-    .toc-item[data-level="4"] { padding-left: 30px; font-size: 11.5px; color: var(--toc-muted, #6b7280); }
-    .toc-item[data-level="5"] { padding-left: 36px; font-size: 11px; color: var(--toc-muted, #6b7280); }
-    .toc-item[data-level="6"] { padding-left: 42px; font-size: 11px; color: var(--toc-muted, #6b7280); }
+    .toc-item[data-level="1"] { padding-left: 10px; font-size: 13.5px; font-weight: 600; }
+    .toc-item[data-level="2"] { padding-left: 18px; font-size: 13px; }
+    .toc-item[data-level="3"] { padding-left: 24px; font-size: 12.5px; }
+    .toc-item[data-level="4"] { padding-left: 30px; font-size: 12.5px; color: var(--toc-muted, #6b7280); }
+    .toc-item[data-level="5"] { padding-left: 36px; font-size: 12px; color: var(--toc-muted, #6b7280); }
+    .toc-item[data-level="6"] { padding-left: 42px; font-size: 12px; color: var(--toc-muted, #6b7280); }
     .toc-item[data-level="1"].active, .toc-item[data-level="2"].active { color: var(--toc-active-color, #4f46e5); }
     .toc-item[data-level="3"].active, .toc-item[data-level="4"].active,
     .toc-item[data-level="5"].active, .toc-item[data-level="6"].active {
@@ -357,104 +345,7 @@
       transform: translateX(-50%) translateY(0);
     }
 
-    /* ── 设置弹窗 ── */
-    .toc-settings-overlay {
-      position: fixed;
-      top: 0; left: 0; right: 0; bottom: 0;
-      background: var(--toc-overlay, rgba(0,0,0,0.35));
-      z-index: 9999990;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      opacity: 0;
-      transition: opacity 0.2s;
-      backdrop-filter: blur(4px);
-    }
-    .toc-settings-overlay.show { opacity: 1; }
-    .toc-settings-modal {
-      background: var(--toc-modal-bg, #fff);
-      border-radius: 14px;
-      padding: 24px;
-      width: 340px;
-      max-width: 90vw;
-      box-shadow: 0 20px 60px rgba(0,0,0,0.25);
-      transform: scale(0.92) translateY(8px);
-      transition: transform 0.25s cubic-bezier(.4,0,.2,1);
-      color: var(--toc-text, #1f2937);
-    }
-    .toc-settings-overlay.show .toc-settings-modal {
-      transform: scale(1) translateY(0);
-    }
-    .toc-settings-title {
-      font-size: 15px;
-      font-weight: 700;
-      margin-bottom: 16px;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .toc-settings-group {
-      margin-bottom: 14px;
-    }
-    .toc-settings-label {
-      font-size: 11.5px;
-      font-weight: 600;
-      color: var(--toc-muted, #6b7280);
-      margin-bottom: 5px;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-    }
-    .toc-settings-input {
-      width: 100%;
-      padding: 8px 12px;
-      border: 1.5px solid var(--toc-border, rgba(0,0,0,0.1));
-      border-radius: 8px;
-      font-size: 13px;
-      background: var(--toc-bg, #fff);
-      color: var(--toc-text, #1f2937);
-      outline: none;
-      transition: border-color 0.2s, box-shadow 0.2s;
-      box-sizing: border-box;
-    }
-    .toc-settings-input:focus {
-      border-color: #6366f1;
-      box-shadow: 0 0 0 3px rgba(99,102,241,0.15);
-    }
-    .toc-settings-input::placeholder { color: var(--toc-muted, #9ca3af); }
-    .toc-settings-hint {
-      font-size: 11px;
-      color: var(--toc-muted, #9ca3af);
-      margin-top: 4px;
-      line-height: 1.4;
-    }
-    .toc-settings-actions {
-      display: flex;
-      gap: 8px;
-      justify-content: flex-end;
-      margin-top: 20px;
-    }
-    .toc-settings-btn {
-      padding: 7px 18px;
-      border: none;
-      border-radius: 8px;
-      font-size: 12.5px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: all 0.15s;
-    }
-    .toc-settings-btn-cancel {
-      background: var(--toc-border, rgba(0,0,0,0.08));
-      color: var(--toc-text, #1f2937);
-    }
-    .toc-settings-btn-cancel:hover { opacity: 0.7; }
-    .toc-settings-btn-save {
-      background: linear-gradient(135deg, #6366f1, #8b5cf6);
-      color: #fff;
-      box-shadow: 0 2px 8px rgba(99,102,241,0.35);
-    }
-    .toc-settings-btn-save:hover { box-shadow: 0 4px 14px rgba(99,102,241,0.45); transform: translateY(-1px); }
-    .toc-settings-btn-save:active { transform: translateY(0); }
-  `;
+
   GM_addStyle(TOCReaderStyle);
 
   // ─── 工具函数 ─────────────────────────────────────────────────────────────────
@@ -525,10 +416,8 @@
         <div class="toc-header-title"><span style="font-size:14px">☰</span> 目录</div>
         <div class="toc-header-actions">
           <button class="toc-btn" id="toc-theme-btn" title="切换主题">🌙</button>
-          <button class="toc-btn" id="toc-translate-btn" title="翻译目录（百度）">译</button>
           <button class="toc-btn" id="toc-collapse-btn" title="折叠/展开">▾</button>
           <button class="toc-btn" id="toc-refresh-btn" title="刷新">↻</button>
-          <button class="toc-btn" id="toc-settings-btn" title="翻译设置">⚙</button>
           <button class="toc-btn" id="toc-close-btn" title="关闭">✕</button>
         </div>
       </div>
@@ -625,7 +514,7 @@
       // 标题文字
       const text = document.createElement('span');
       text.className = 'toc-text';
-      text.textContent = isTranslated && translatedData[node.id] ? translatedData[node.id] : node.text;
+      text.textContent = node.text;
 
       item.appendChild(collapseBtn);
       item.appendChild(dot);
@@ -684,10 +573,6 @@
       id: ensureId(el, idx),
       el: el
     }));
-    isTranslated = false;
-    translatedData = {};
-    const transBtn = document.getElementById('toc-translate-btn');
-    if (transBtn) { transBtn.textContent = '译'; transBtn.title = '翻译目录（百度）'; }
     renderToc();
 
     const panel = document.getElementById(PANEL_ID);
@@ -859,7 +744,6 @@
     GM_registerMenuCommand(`${mark('light')}主题: 亮色`, () => setTheme('light'));
     GM_registerMenuCommand(`${mark('dark')}主题: 暗色`, () => setTheme('dark'));
     GM_registerMenuCommand('🔄 刷新目录', refreshHeadings);
-    GM_registerMenuCommand('⚙ 翻译设置', showSettingsModal);
   }
 
   // ─── 悬浮按钮拖拽 ───────────────────────────────────────────────────────────
@@ -900,250 +784,6 @@
     });
   }
 
-  // ─── 百度翻译设置弹窗 ─────────────────────────────────────────────────────────
-  function showSettingsModal() {
-    // 移除已有弹窗
-    document.querySelector('.toc-settings-overlay')?.remove();
-
-    const overlay = document.createElement('div');
-    overlay.className = 'toc-settings-overlay';
-
-    const savedAppId = GM_getValue(BAIDU_APPID_KEY, '') || '';
-    const savedSecret = GM_getValue(BAIDU_SECRETKEY_KEY, '') || '';
-
-    overlay.innerHTML = `
-      <div class="toc-settings-modal">
-        <div class="toc-settings-title">⚙ 百度翻译配置</div>
-        <div class="toc-settings-group">
-          <div class="toc-settings-label">APP ID</div>
-          <input class="toc-settings-input" id="toc-baidu-appid" type="text" placeholder="输入百度翻译 APP ID" value="${savedAppId}">
-        </div>
-        <div class="toc-settings-group">
-          <div class="toc-settings-label">密钥 (Secret Key)</div>
-          <input class="toc-settings-input" id="toc-baidu-secretkey" type="password" placeholder="输入百度翻译密钥" value="${savedSecret}">
-        </div>
-        <div class="toc-settings-hint">
-          前往 <a href="https://fanyi-api.baidu.com/" target="_blank" style="color:#6366f1;text-decoration:none">fanyi-api.baidu.com</a> 注册获取 APP ID 和密钥。<br>
-          标准版每月免费 200 万字符。
-        </div>
-        <div class="toc-settings-actions">
-          <button class="toc-settings-btn toc-settings-btn-cancel" id="toc-settings-cancel">取消</button>
-          <button class="toc-settings-btn toc-settings-btn-save" id="toc-settings-save">保存</button>
-        </div>
-      </div>
-    `;
-
-    document.body.appendChild(overlay);
-    requestAnimationFrame(() => overlay.classList.add('show'));
-
-    const close = () => {
-      overlay.classList.remove('show');
-      setTimeout(() => overlay.remove(), 250);
-    };
-
-    overlay.querySelector('#toc-settings-cancel').addEventListener('click', close);
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
-
-    overlay.querySelector('#toc-settings-save').addEventListener('click', () => {
-      const appId = overlay.querySelector('#toc-baidu-appid').value.trim();
-      const secret = overlay.querySelector('#toc-baidu-secretkey').value.trim();
-      GM_setValue(BAIDU_APPID_KEY, appId);
-      GM_setValue(BAIDU_SECRETKEY_KEY, secret);
-      close();
-      showToast(appId ? '翻译配置已保存' : '翻译配置已清除');
-    });
-  }
-
-  // ─── 百度翻译功能 ──────────────────────────────────────────────────────────────
-  function detectPageLang() {
-    const htmlLang = document.documentElement.lang;
-    if (htmlLang) {
-      const code = htmlLang.split('-')[0].toLowerCase();
-      if (code === 'zh') return 'zh';
-      return code;
-    }
-    const sample = document.body?.innerText?.slice(0, 300) || '';
-    return (sample.match(/[\u4e00-\u9fff]/g) || []).length > sample.length * 0.1 ? 'zh' : 'en';
-  }
-
-  function getTranslateLangPair() {
-    const pageLang = detectPageLang();
-    // zh -> en, en -> zh, others -> zh
-    if (pageLang === 'zh') return { from: 'zh', to: 'en' };
-    if (pageLang === 'en') return { from: 'en', to: 'zh' };
-    return { from: 'auto', to: 'zh' };
-  }
-
-  function baiduSign(query, salt, secretKey) {
-    const str = query + salt + secretKey;
-    // Simple MD5 using SubtleCrypto
-    let hash = 0x811c9dc5;
-    for (let i = 0; i < str.length; i++) {
-      hash ^= str.charCodeAt(i);
-      hash = Math.imul(hash, 0x01000193);
-    }
-    // FNV-1a is NOT MD5. We need proper MD5 for Baidu API.
-    // Let's use a simple approach: use native crypto
-    return md5(str);
-  }
-
-  // Simple MD5 implementation (no external dependency)
-  function md5(string) {
-    function md5cycle(x, k) {
-      let a = x[0], b = x[1], c = x[2], d = x[3];
-      a = ff(a, b, c, d, k[0], 7, -680876936); d = ff(d, a, b, c, k[1], 12, -389564586);
-      c = ff(c, d, a, b, k[2], 17, 606105819); b = ff(b, c, d, a, k[3], 22, -1044525330);
-      a = ff(a, b, c, d, k[4], 7, -176418897); d = ff(d, a, b, c, k[5], 12, 1200080426);
-      c = ff(c, d, a, b, k[6], 17, -1473231341); b = ff(b, c, d, a, k[7], 22, -45705983);
-      a = ff(a, b, c, d, k[8], 7, 1770035416); d = ff(d, a, b, c, k[9], 12, -1958414417);
-      c = ff(c, d, a, b, k[10], 17, -42063); b = ff(b, c, d, a, k[11], 22, -1990404162);
-      a = ff(a, b, c, d, k[12], 7, 1804603682); d = ff(d, a, b, c, k[13], 12, -40341101);
-      c = ff(c, d, a, b, k[14], 17, -1502002290); b = ff(b, c, d, a, k[15], 22, 1236535329);
-      a = gg(a, b, c, d, k[1], 5, -165796510); d = gg(d, a, b, c, k[6], 9, -1069501632);
-      c = gg(c, d, a, b, k[11], 14, 643717713); b = gg(b, c, d, a, k[0], 20, -373897302);
-      a = gg(a, b, c, d, k[5], 5, -701558691); d = gg(d, a, b, c, k[10], 9, 38016083);
-      c = gg(c, d, a, b, k[15], 14, -660478335); b = gg(b, c, d, a, k[4], 20, -405537848);
-      a = gg(a, b, c, d, k[9], 5, 568446438); d = gg(d, a, b, c, k[14], 9, -1019803690);
-      c = gg(c, d, a, b, k[3], 14, -187363961); b = gg(b, c, d, a, k[8], 20, 1163531501);
-      a = gg(a, b, c, d, k[13], 5, -1444681467); d = gg(d, a, b, c, k[2], 9, -51403784);
-      c = gg(c, d, a, b, k[7], 14, 1735328473); b = gg(b, c, d, a, k[12], 20, -1926607734);
-      a = hh(a, b, c, d, k[5], 4, -378558); d = hh(d, a, b, c, k[8], 11, -2022574463);
-      c = hh(c, d, a, b, k[11], 16, 1839030562); b = hh(b, c, d, a, k[14], 23, -35309556);
-      a = hh(a, b, c, d, k[1], 4, -1530992060); d = hh(d, a, b, c, k[4], 11, 1272893353);
-      c = hh(c, d, a, b, k[7], 16, -155497632); b = hh(b, c, d, a, k[10], 23, -1094730640);
-      a = hh(a, b, c, d, k[13], 4, 681279174); d = hh(d, a, b, c, k[0], 11, -358537222);
-      c = hh(c, d, a, b, k[3], 16, -722521979); b = hh(b, c, d, a, k[6], 23, 76029189);
-      a = hh(a, b, c, d, k[9], 4, -640364487); d = hh(d, a, b, c, k[12], 11, -421815835);
-      c = hh(c, d, a, b, k[15], 16, 530742520); b = hh(b, c, d, a, k[2], 23, -995338651);
-      a = ii(a, b, c, d, k[0], 6, -198630844); d = ii(d, a, b, c, k[7], 10, 1126891415);
-      c = ii(c, d, a, b, k[14], 15, -1416354905); b = ii(b, c, d, a, k[5], 21, -57434055);
-      a = ii(a, b, c, d, k[12], 6, 1700485571); d = ii(d, a, b, c, k[3], 10, -1894986606);
-      c = ii(c, d, a, b, k[10], 15, -1051523); b = ii(b, c, d, a, k[1], 21, -2054922799);
-      a = ii(a, b, c, d, k[8], 6, 1873313359); d = ii(d, a, b, c, k[15], 10, -30611744);
-      c = ii(c, d, a, b, k[6], 15, -1560198380); b = ii(b, c, d, a, k[13], 21, 1309151649);
-      a = ii(a, b, c, d, k[4], 6, -145523070); d = ii(d, a, b, c, k[11], 10, -1120210379);
-      c = ii(c, d, a, b, k[2], 15, 718787259); b = ii(b, c, d, a, k[9], 21, -343485551);
-      x[0] = add32(a, x[0]); x[1] = add32(b, x[1]); x[2] = add32(c, x[2]); x[3] = add32(d, x[3]);
-    }
-    function cmn(q, a, b, x, s, t) { a = add32(add32(a, q), add32(x, t)); return add32((a << s) | (a >>> (32 - s)), b); }
-    function ff(a, b, c, d, x, s, t) { return cmn((b & c) | ((~b) & d), a, b, x, s, t); }
-    function gg(a, b, c, d, x, s, t) { return cmn((b & d) | (c & (~d)), a, b, x, s, t); }
-    function hh(a, b, c, d, x, s, t) { return cmn(b ^ c ^ d, a, b, x, s, t); }
-    function ii(a, b, c, d, x, s, t) { return cmn(c ^ (b | (~d)), a, b, x, s, t); }
-    function md51(s) {
-      let n = s.length, state = [1732584193, -271733879, -1732584194, 271733878], i;
-      for (i = 64; i <= n; i += 64) md5cycle(state, md5blk(s.substring(i - 64, i)));
-      s = s.substring(i - 64);
-      let tail = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
-      for (i = 0; i < s.length; i++) tail[i >> 2] |= s.charCodeAt(i) << ((i % 4) << 3);
-      tail[i >> 2] |= 0x80 << ((i % 4) << 3);
-      if (i > 55) { md5cycle(state, tail); tail = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]; }
-      tail[14] = n * 8;
-      md5cycle(state, tail);
-      return state;
-    }
-    function md5blk(s) {
-      let md5blks = [], i;
-      for (i = 0; i < 64; i += 4) md5blks[i >> 2] = s.charCodeAt(i) + (s.charCodeAt(i + 1) << 8) + (s.charCodeAt(i + 2) << 16) + (s.charCodeAt(i + 3) << 24);
-      return md5blks;
-    }
-    function add32(a, b) { return (a + b) & 0xFFFFFFFF; }
-    function rhex(n) {
-      let s = '', j;
-      for (j = 0; j < 4; j++) s += ('0' + ((n >> (j * 8 + 4)) & 0x0F).toString(16) + (n >> (j * 8) & 0x0F).toString(16)).slice(-2);
-      return s;
-    }
-    const x = md51(string);
-    return rhex(x[0]) + rhex(x[1]) + rhex(x[2]) + rhex(x[3]);
-  }
-
-  function translateTextBaidu(text, from, to, appId, secretKey) {
-    return new Promise((resolve) => {
-      const salt = Date.now().toString();
-      const sign = md5(appId + text + salt + secretKey);
-      const params = new URLSearchParams({
-        q: text,
-        from: from,
-        to: to,
-        appid: appId,
-        salt: salt,
-        sign: sign,
-      });
-
-      GM_xmlhttpRequest({
-        method: 'GET',
-        url: `https://fanyi-api.baidu.com/api/trans/vip/translate?${params.toString()}`,
-        onload(response) {
-          if (response.status === 200) {
-            try {
-              const data = JSON.parse(response.responseText);
-              if (data.trans_result && data.trans_result.length > 0) {
-                resolve(data.trans_result[0].dst);
-                return;
-              }
-              // Error code
-              if (data.error_code) {
-                console.warn('[TOC Reader] Baidu Translate error:', data.error_code, data.error_msg);
-                resolve(text);
-                return;
-              }
-            } catch (e) {
-              console.warn('[TOC Reader] Parse error:', e);
-            }
-          }
-          resolve(text);
-        },
-        onerror() { resolve(text); },
-        ontimeout() { resolve(text); }
-      });
-    });
-  }
-
-  async function toggleTranslate() {
-    const btn = document.getElementById('toc-translate-btn');
-    if (!btn) return;
-
-    if (isTranslated) {
-      isTranslated = false;
-      btn.textContent = '译';
-      btn.title = '翻译目录（百度）';
-      renderToc();
-      showToast('已恢复原文');
-      return;
-    }
-
-    // 检查配置
-    const appId = GM_getValue(BAIDU_APPID_KEY, '');
-    const secretKey = GM_getValue(BAIDU_SECRETKEY_KEY, '');
-    if (!appId || !secretKey) {
-      showToast('请先配置百度翻译 APP ID 和密钥');
-      showSettingsModal();
-      return;
-    }
-
-    btn.textContent = '…';
-    btn.title = '翻译中...';
-    showToast('正在翻译目录...');
-
-    const { from, to } = getTranslateLangPair();
-    translatedData = {};
-
-    const batchSize = 5;
-    for (let i = 0; i < headingData.length; i += batchSize) {
-      const batch = headingData.slice(i, i + batchSize);
-      const results = await Promise.all(
-        batch.map(h => translateTextBaidu(h.text, from, to, appId, secretKey))
-      );
-      batch.forEach((h, idx) => { translatedData[h.id] = results[idx]; });
-    }
-
-    isTranslated = true;
-    btn.textContent = '文';
-    btn.title = '恢复原文';
-    renderToc();
-    showToast('翻译完成');
-  }
-
   // ─── 初始化 ────────────────────────────────────────────────────────────────────
   function init() {
     if (document.getElementById(PANEL_ID)) return;
@@ -1179,9 +819,6 @@
     });
 
     document.getElementById('toc-theme-btn').addEventListener('click', cycleTheme);
-    document.getElementById('toc-translate-btn').addEventListener('click', toggleTranslate);
-
-    document.getElementById('toc-settings-btn').addEventListener('click', showSettingsModal);
 
     document.getElementById('toc-close-btn').addEventListener('click', () => {
       panel.classList.add('hidden');
