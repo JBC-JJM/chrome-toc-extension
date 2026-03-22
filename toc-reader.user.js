@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         网页目录阅读器 (TOC Reader)
 // @namespace    https://github.com/JBC-JJM/chrome-toc-extension
-// @version      1.4.0
-// @description  自动提取网页标题结构，生成悬浮目录面板，支持点击跳转、折叠展开、拖拽移动、智能主题
+// @version      1.5.0
+// @description  自动提取网页标题结构，生成悬浮目录面板，支持点击跳转、折叠展开、拖拽移动、智能主题、目录翻译
 // @author       JBC-JJM
 // @match        *://*/*
 // @grant        GM_addStyle
@@ -10,6 +10,8 @@
 // @grant        GM_getValue
 // @grant        GM_registerMenuCommand
 // @grant        GM_unregisterMenuCommand
+// @grant        GM_xmlhttpRequest
+// @connect      translate.googleapis.com
 // @run-at       document-idle
 // @require      https://cdnjs.cloudflare.com/ajax/libs/tocbot/4.18.2/tocbot.min.js
 // ==/UserScript==
@@ -26,6 +28,11 @@
   const COLLAPSE_KEY = 'toc_reader_collapse';
   const SIZE_KEY = 'toc_reader_size';
   const TOGGLE_POS_KEY = 'toc_reader_toggle_pos';
+  const TRANSLATE_KEY = 'toc_reader_translated';
+  const TRANSLATE_LANG_KEY = 'toc_reader_trans_lang'; // target language
+
+  let isTranslated = false;
+  let translatedData = {}; // { headingId: translatedText }
 
   // ─── 站点特定配置 ────────────────────────────────────────────────────────────
   const SITE_SETTINGS = {
@@ -365,6 +372,7 @@
         <div class="toc-header-title">📋 目录</div>
         <div class="toc-header-actions">
           <button class="toc-btn" id="toc-theme-btn" title="切换主题">🌙</button>
+          <button class="toc-btn" id="toc-translate-btn" title="翻译目录">🌐</button>
           <button class="toc-btn" id="toc-collapse-btn" title="折叠/展开">▾</button>
           <button class="toc-btn" id="toc-refresh-btn" title="刷新">↺</button>
           <button class="toc-btn" id="toc-close-btn" title="关闭">✕</button>
@@ -463,7 +471,7 @@
       // 标题文字
       const text = document.createElement('span');
       text.className = 'toc-text';
-      text.textContent = node.text;
+      text.textContent = isTranslated && translatedData[node.id] ? translatedData[node.id] : node.text;
 
       item.appendChild(collapseBtn);
       item.appendChild(dot);
@@ -473,11 +481,6 @@
         document.querySelectorAll('.toc-item').forEach(i => i.classList.remove('active'));
         item.classList.add('active');
         scrollToHeading(node.id);
-        
-        // 点击时只展开当前路径，折叠其他
-        if (node.children.length > 0) {
-          expandOnlyPath(node);
-        }
       });
 
       container.appendChild(item);
@@ -500,35 +503,6 @@
       const btn = item.querySelector('.toc-collapse-btn');
       if (btn) btn.classList.toggle('collapsed', isCollapsed);
     }
-  }
-
-  // 只展开当前点击的路径，其他全部折叠
-  function expandOnlyPath(clickedNode) {
-    // 先折叠所有
-    document.querySelectorAll('.toc-children').forEach(el => {
-      el.classList.add('collapsed');
-    });
-    document.querySelectorAll('.toc-collapse-btn').forEach(btn => {
-      if (!btn.classList.contains('empty')) {
-        btn.classList.add('collapsed');
-      }
-    });
-
-    // 找到当前节点的父节点链
-    const path = getNodePath(clickedNode.id);
-    
-    // 展开路径上的节点
-    path.forEach(nodeId => {
-      const item = document.querySelector(`.toc-item[data-id="${nodeId}"]`);
-      if (item) {
-        const childContainer = item.nextElementSibling;
-        if (childContainer && childContainer.classList.contains('toc-children')) {
-          childContainer.classList.remove('collapsed');
-          const btn = item.querySelector('.toc-collapse-btn');
-          if (btn) btn.classList.remove('collapsed');
-        }
-      }
-    });
   }
 
   function getNodePath(nodeId) {
@@ -634,7 +608,9 @@
     });
   }
 
-  // ─── 滚动高亮当前标题 ─────────────────────────────────────────────────────────
+  // ─── 滚动高亮 + 自动展开当前路径 ────────────────────────────────────────────────
+  let lastActiveId = null;
+
   function setupScrollSpy() {
     const offset = 100;
     const onScroll = () => {
@@ -650,13 +626,42 @@
         }
       }
 
+      if (current === lastActiveId) return;
+      lastActiveId = current;
+
       document.querySelectorAll('.toc-item').forEach(item => {
         item.classList.toggle('active', item.dataset.id === current);
       });
+
+      // 自动展开当前标题的父路径
+      if (current) {
+        expandPathForId(current);
+        // 滚动目录使当前项可见
+        const activeItem = document.querySelector(`.toc-item[data-id="${current}"]`);
+        if (activeItem) {
+          activeItem.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        }
+      }
     };
 
     window.addEventListener('scroll', onScroll, { passive: true });
     setTimeout(onScroll, 500);
+  }
+
+  // 展开某个节点的父路径（用于滚动跟随和点击）
+  function expandPathForId(nodeId) {
+    const path = getNodePath(nodeId);
+    path.forEach(id => {
+      const item = document.querySelector(`.toc-item[data-id="${id}"]`);
+      if (item) {
+        const childContainer = item.nextElementSibling;
+        if (childContainer && childContainer.classList.contains('toc-children') && childContainer.classList.contains('collapsed')) {
+          childContainer.classList.remove('collapsed');
+          const btn = item.querySelector('.toc-collapse-btn');
+          if (btn) btn.classList.remove('collapsed');
+        }
+      }
+    });
   }
 
   // ─── 主题管理 ─────────────────────────────────────────────────────────────────
@@ -756,6 +761,88 @@
     });
   }
 
+  // ─── 翻译功能 ──────────────────────────────────────────────────────────────────
+  function detectPageLang() {
+    const htmlLang = document.documentElement.lang;
+    if (htmlLang) {
+      const code = htmlLang.split('-')[0].toLowerCase();
+      if (code === 'zh' || code === 'zh-cn' || code === 'zh-tw') return 'zh';
+      return code;
+    }
+    // 通过内容检测
+    const sample = document.body?.innerText?.slice(0, 200) || '';
+    const zhCount = (sample.match(/[\u4e00-\u9fff]/g) || []).length;
+    return zhCount > sample.length * 0.1 ? 'zh' : 'en';
+  }
+
+  function getTargetLang() {
+    return GM_getValue(TRANSLATE_LANG_KEY, null) || (detectPageLang() === 'zh' ? 'en' : 'zh');
+  }
+
+  function translateText(text, targetLang) {
+    return new Promise((resolve, reject) => {
+      GM_xmlhttpRequest({
+        method: 'GET',
+        url: `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${targetLang}&dt=t&q=${encodeURIComponent(text)}`,
+        onload(response) {
+          if (response.status === 200) {
+            try {
+              const data = JSON.parse(response.responseText);
+              let result = '';
+              data[0]?.forEach(part => { result += part[0]; });
+              resolve(result || text);
+            } catch {
+              resolve(text);
+            }
+          } else {
+            resolve(text);
+          }
+        },
+        onerror() { resolve(text); },
+        ontimeout() { resolve(text); }
+      });
+    });
+  }
+
+  async function toggleTranslate() {
+    const btn = document.getElementById('toc-translate-btn');
+    if (!btn) return;
+
+    if (isTranslated) {
+      // 恢复原文
+      isTranslated = false;
+      btn.textContent = '🌐';
+      btn.title = '翻译目录';
+      renderToc();
+      showToast('已恢复原文');
+      return;
+    }
+
+    btn.textContent = '⏳';
+    btn.title = '翻译中...';
+    showToast('正在翻译目录...');
+
+    const targetLang = getTargetLang();
+    translatedData = {};
+
+    // 批量翻译，每次最多5个并发
+    const batchSize = 5;
+    const texts = headingData.map(h => h.text);
+    for (let i = 0; i < texts.length; i += batchSize) {
+      const batch = texts.slice(i, i + batchSize);
+      const results = await Promise.all(batch.map(t => translateText(t, targetLang)));
+      batch.forEach((_, idx) => {
+        translatedData[headingData[i + idx].id] = results[idx];
+      });
+    }
+
+    isTranslated = true;
+    btn.textContent = '🔙';
+    btn.title = '恢复原文';
+    renderToc();
+    showToast('翻译完成');
+  }
+
   // ─── 初始化 ────────────────────────────────────────────────────────────────────
   function init() {
     if (document.getElementById(PANEL_ID)) return;
@@ -820,6 +907,9 @@
 
     // 主题按钮
     document.getElementById('toc-theme-btn').addEventListener('click', cycleTheme);
+
+    // 翻译按钮
+    document.getElementById('toc-translate-btn').addEventListener('click', toggleTranslate);
 
     // 关闭按钮
     document.getElementById('toc-close-btn').addEventListener('click', () => {
