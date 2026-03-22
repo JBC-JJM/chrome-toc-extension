@@ -105,9 +105,33 @@
       font-size: 13px;
       transition: opacity 0.2s, transform 0.2s, background 0.3s, border-color 0.3s;
       color: var(--toc-text, #374151);
-      resize: both;
       overflow: hidden;
     }
+
+    /* 自定义调整大小手柄 */
+    .toc-resize-handle {
+      position: absolute;
+      right: 0;
+      bottom: 0;
+      width: 16px;
+      height: 16px;
+      cursor: nwse-resize;
+      z-index: 10;
+    }
+    .toc-resize-handle::before {
+      content: '';
+      position: absolute;
+      right: 3px;
+      bottom: 3px;
+      width: 8px;
+      height: 8px;
+      border-right: 2px solid #9ca3af;
+      border-bottom: 2px solid #9ca3af;
+      opacity: 0.5;
+      transition: opacity 0.2s;
+    }
+    .toc-resize-handle:hover::before { opacity: 1; }
+    #${PANEL_ID}[colorscheme="dark"] .toc-resize-handle::before { border-color: #6b7280; }
     #${PANEL_ID}.hidden {
       opacity: 0;
       pointer-events: none;
@@ -258,11 +282,6 @@
       flex-shrink: 0;
     }
 
-    /* 调整大小手柄 */
-    #${PANEL_ID}::-webkit-resizer {
-      background: transparent;
-    }
-
     #toc-reader-toast {
       position: fixed;
       left: 50%;
@@ -360,6 +379,7 @@
       </div>
       <div class="toc-body" id="toc-body"></div>
       <div class="toc-footer" id="toc-footer">共 0 个标题</div>
+      <div class="toc-resize-handle" id="toc-resize-handle"></div>
     `;
 
     return panel;
@@ -587,24 +607,37 @@
     });
   }
 
-  // ─── 大小保存 ─────────────────────────────────────────────────────────────────
+  // ─── 大小拖拽调整 ───────────────────────────────────────────────────────────
   function enableResize(panel) {
-    let resizeTimeout;
-    
-    const saveSize = () => {
-      const width = panel.style.width || panel.offsetWidth + 'px';
-      const height = panel.style.height || panel.offsetHeight + 'px';
-      GM_setValue(SIZE_KEY, { width, height });
-    };
+    const handle = document.getElementById('toc-resize-handle');
+    if (!handle) return;
 
-    const onResize = () => {
-      clearTimeout(resizeTimeout);
-      resizeTimeout = setTimeout(saveSize, 500);
-    };
+    let resizing = false, startX = 0, startY = 0, startW = 0, startH = 0;
 
-    panel.addEventListener('mouseup', onResize);
-    panel.addEventListener('mousemove', (e) => {
-      if (e.buttons === 1) onResize();
+    handle.addEventListener('mousedown', e => {
+      e.preventDefault();
+      e.stopPropagation();
+      resizing = true;
+      startX = e.clientX;
+      startY = e.clientY;
+      startW = panel.offsetWidth;
+      startH = panel.offsetHeight;
+    });
+
+    document.addEventListener('mousemove', e => {
+      if (!resizing) return;
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      const newW = Math.max(180, Math.min(500, startW + dx));
+      const newH = Math.max(200, Math.min(window.innerHeight * 0.9, startH + dy));
+      panel.style.width = newW + 'px';
+      panel.style.height = newH + 'px';
+    });
+
+    document.addEventListener('mouseup', () => {
+      if (!resizing) return;
+      resizing = false;
+      GM_setValue(SIZE_KEY, { width: panel.style.width, height: panel.style.height });
     });
   }
 
