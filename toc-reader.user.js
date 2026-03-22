@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         网页目录阅读器 (TOC Reader)
 // @namespace    https://github.com/JBC-JJM/chrome-toc-extension
-// @version      1.3.0
+// @version      1.4.0
 // @description  自动提取网页标题结构，生成悬浮目录面板，支持点击跳转、折叠展开、拖拽移动、智能主题
 // @author       JBC-JJM
 // @match        *://*/*
@@ -25,6 +25,7 @@
   const POSITION_KEY = 'toc_reader_position';
   const COLLAPSE_KEY = 'toc_reader_collapse';
   const SIZE_KEY = 'toc_reader_size';
+  const TOGGLE_POS_KEY = 'toc_reader_toggle_pos';
 
   // ─── 站点特定配置 ────────────────────────────────────────────────────────────
   const SITE_SETTINGS = {
@@ -74,7 +75,7 @@
       border: none;
       border-radius: 6px 0 0 6px;
       padding: 10px 6px;
-      cursor: pointer;
+      cursor: move;
       font-size: 13px;
       writing-mode: vertical-rl;
       letter-spacing: 2px;
@@ -83,6 +84,7 @@
       user-select: none;
     }
     #${TOGGLE_ID}:hover { background: #4338ca; }
+    #${TOGGLE_ID}.dragging { cursor: grabbing; }
 
     #${PANEL_ID} {
       position: fixed;
@@ -273,15 +275,6 @@
       font-size: 12px;
     }
 
-    .toc-footer {
-      padding: 4px 12px;
-      border-top: 1px solid var(--toc-border, #f3f4f6);
-      font-size: 11px;
-      color: #9ca3af;
-      text-align: right;
-      flex-shrink: 0;
-    }
-
     #toc-reader-toast {
       position: fixed;
       left: 50%;
@@ -378,7 +371,6 @@
         </div>
       </div>
       <div class="toc-body" id="toc-body"></div>
-      <div class="toc-footer" id="toc-footer">共 0 个标题</div>
       <div class="toc-resize-handle" id="toc-resize-handle"></div>
     `;
 
@@ -430,21 +422,17 @@
 
   function renderToc(expandOnly = null) {
     const body = document.getElementById('toc-body');
-    const footer = document.getElementById('toc-footer');
     if (!body) return;
 
     body.innerHTML = '';
 
     if (headingData.length === 0) {
       body.innerHTML = '<div class="toc-empty">未检测到标题结构</div>';
-      footer.textContent = '共 0 个标题';
       return;
     }
 
     treeData = buildTocTree(headingData);
     renderTree(treeData, body, 0, expandOnly);
-
-    footer.textContent = `共 ${headingData.length} 个标题`;
   }
 
   function renderTree(nodes, container, depth, expandOnly = null) {
@@ -572,7 +560,12 @@
       el: el
     }));
     renderToc();
-    showToast(`已刷新，找到 ${headingData.length} 个标题`);
+
+    // 找不到目录时自动隐藏面板
+    const panel = document.getElementById(PANEL_ID);
+    if (headingData.length === 0 && panel && !panel.classList.contains('hidden')) {
+      panel.classList.add('hidden');
+    }
   }
 
   // ─── 拖拽逻辑 ─────────────────────────────────────────────────────────────────
@@ -720,6 +713,49 @@
     GM_registerMenuCommand('🔄 刷新目录', refreshHeadings);
   }
 
+  // ─── 悬浮按钮拖拽 ───────────────────────────────────────────────────────────
+  function enableToggleDrag(btn) {
+    let dragging = false, hasMoved = false, startX = 0, startY = 0, startTop = 0;
+
+    // 恢复保存的位置
+    const savedPos = GM_getValue(TOGGLE_POS_KEY, null);
+    if (savedPos) {
+      btn.style.top = savedPos.top + 'px';
+      btn.style.right = savedPos.right + 'px';
+    }
+
+    btn.addEventListener('mousedown', e => {
+      dragging = true;
+      hasMoved = false;
+      startX = e.clientX;
+      startY = e.clientY;
+      startTop = btn.getBoundingClientRect().top;
+      btn.classList.add('dragging');
+      e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', e => {
+      if (!dragging) return;
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) hasMoved = true;
+      if (!hasMoved) return;
+      const newTop = Math.max(0, Math.min(window.innerHeight - btn.offsetHeight, startTop + dy));
+      btn.style.top = newTop + 'px';
+      btn.style.transform = 'none';
+    });
+
+    document.addEventListener('mouseup', () => {
+      if (!dragging) return;
+      dragging = false;
+      btn.classList.remove('dragging');
+      if (hasMoved) {
+        btn.classList.add('was-dragged');
+        GM_setValue(TOGGLE_POS_KEY, { top: btn.style.top, right: btn.style.right });
+      }
+    });
+  }
+
   // ─── 初始化 ────────────────────────────────────────────────────────────────────
   function init() {
     if (document.getElementById(PANEL_ID)) return;
@@ -792,11 +828,19 @@
     });
 
     // 悬浮切换按钮
-    toggle.addEventListener('click', () => {
+    toggle.addEventListener('click', (e) => {
+      // 如果刚拖拽完，忽略这次点击
+      if (toggle.classList.contains('was-dragged')) {
+        toggle.classList.remove('was-dragged');
+        return;
+      }
       const isHidden = panel.classList.toggle('hidden');
       GM_setValue(STORAGE_KEY, !isHidden);
       if (!isHidden) refreshHeadings();
     });
+
+    // 悬浮按钮可拖拽移动
+    enableToggleDrag(toggle);
 
     // SPA 路由变化时自动刷新
     let lastUrl = location.href;
