@@ -26,6 +26,8 @@
   const COLLAPSE_KEY = 'toc_reader_collapse';
   const SIZE_KEY = 'toc_reader_size';
   const TOGGLE_POS_KEY = 'toc_reader_toggle_pos';
+  const SITE_VISIBLE_KEY = 'toc_reader_site_visible_';
+  const EXCLUDED_DOMAINS_KEY = 'toc_reader_excluded_domains';
 
   // ─── 站点特定配置 ────────────────────────────────────────────────────────────
   const SITE_SETTINGS = {
@@ -452,6 +454,7 @@
       '<div class="toc-header-title"><span style="font-size:14px">\u2630</span> \u76EE\u5F55</div>' +
       '<div class="toc-header-actions">' +
       '<button class="toc-btn" id="toc-theme-btn" title="\u5207\u6362\u4E3B\u9898">\uD83C\uDF19</button>' +
+      '<button class="toc-btn" id="toc-exclude-btn" title="\u672C\u7AD9\u4E0D\u518D\u663E\u793A">\uD83D\uDD12</button>' +
       '<button class="toc-btn" id="toc-collapse-btn" title="\u6298\u53E0/\u5C55\u5F00">\u25BE</button>' +
       '<button class="toc-btn" id="toc-refresh-btn" title="\u5237\u65B0">\u21BA</button>' +
       '<button class="toc-btn" id="toc-close-btn" title="\u5173\u95ED">\u2715</button>' +
@@ -734,6 +737,27 @@
     });
   }
 
+  // ─── 排除域名管理 ──────────────────────────────────────────────────────────────
+  function getExcludedDomains() {
+    return GM_getValue(EXCLUDED_DOMAINS_KEY, []);
+  }
+  function addExcludedDomain(domain) {
+    var list = getExcludedDomains();
+    if (list.indexOf(domain) === -1) { list.push(domain); GM_setValue(EXCLUDED_DOMAINS_KEY, list); }
+  }
+  function removeExcludedDomain(domain) {
+    var list = getExcludedDomains();
+    list = list.filter(function (d) { return d !== domain; });
+    GM_setValue(EXCLUDED_DOMAINS_KEY, list);
+  }
+  function isDomainExcluded() {
+    var domain = location.hostname;
+    return getExcludedDomains().indexOf(domain) !== -1;
+  }
+  function getSiteVisibleKey() {
+    return SITE_VISIBLE_KEY + location.hostname;
+  }
+
   // ─── 菜单命令 ─────────────────────────────────────────────────────────────────
   function initMenu() {
     if (typeof GM_registerMenuCommand !== 'function') return;
@@ -742,6 +766,22 @@
     GM_registerMenuCommand('\u4E3B\u9898: \u4EAE\u8272', function () { setTheme('light'); });
     GM_registerMenuCommand('\u4E3B\u9898: \u6697\u8272', function () { setTheme('dark'); });
     GM_registerMenuCommand('\u5237\u65B0\u76EE\u5F55', refreshHeadings);
+    GM_registerMenuCommand('\u672C\u7AD9\u4E0D\u518D\u663E\u793A', function () {
+      addExcludedDomain(location.hostname);
+      showToast('\u5DF2\u7981\u7528\uFF1A' + location.hostname + '\uFF0C\u5237\u65B0\u9875\u9762\u751F\u6548');
+    });
+    var excluded = getExcludedDomains();
+    if (excluded.length > 0) {
+      GM_registerMenuCommand('\u7BA1\u7406\u7981\u7528\u7AD9\u70B9 (' + excluded.length + ')', function () {
+        var msg = '\u5DF2\u7981\u7528\u7684\u7AD9\u70B9\uFF1A\n' + excluded.join('\n') + '\n\n\u53D1\u9001\u7AD9\u70B9\u540D\u79FB\u9664\u7981\u7528';
+        var answer = prompt(msg);
+        if (answer) {
+          var d = answer.trim().toLowerCase();
+          if (excluded.indexOf(d) !== -1) { removeExcludedDomain(d); showToast('\u5DF2\u79FB\u9664\u7981\u7528\uFF1A' + d); }
+          else { showToast('\u672A\u627E\u5230\u8BE5\u7AD9\u70B9'); }
+        }
+      });
+    }
   }
 
   // ─── 悬浮按钮拖拽 ───────────────────────────────────────────────────────────
@@ -784,6 +824,8 @@
   // ─── 初始化 ────────────────────────────────────────────────────────────────────
   function init() {
     if (document.getElementById(PANEL_ID)) return;
+    if (isDomainExcluded()) return;
+
     var panel = buildPanel();
     var toggle = buildToggleBtn();
     document.body.appendChild(panel);
@@ -800,8 +842,16 @@
       if (savedSize.width) panel.style.width = savedSize.width;
       if (savedSize.height) panel.style.height = savedSize.height;
     }
-    var visible = GM_getValue(STORAGE_KEY, true);
-    if (!visible) panel.classList.add('hidden');
+    // per-site visibility: first visit defaults to open (key not set)
+    var siteKey = getSiteVisibleKey();
+    var visible = GM_getValue(siteKey, null);
+    if (visible === null) visible = true; // first visit → open
+    if (!visible) {
+      panel.classList.add('hidden');
+      toggle.style.display = ''; // show toggle when panel hidden
+    } else {
+      toggle.style.display = 'none'; // hide toggle when panel open
+    }
 
     refreshHeadings();
     enableDrag(panel, document.getElementById('toc-drag-handle'));
@@ -825,14 +875,33 @@
 
     document.getElementById('toc-close-btn').addEventListener('click', function () {
       panel.classList.add('hidden');
-      GM_setValue(STORAGE_KEY, false);
+      toggle.style.display = '';
+      GM_setValue(siteKey, false);
+    });
+
+    // double-click header to close panel and show toggle
+    var headerEl = document.getElementById('toc-drag-handle');
+    headerEl.addEventListener('dblclick', function (e) {
+      if (e.target.closest('.toc-btn')) return;
+      panel.classList.add('hidden');
+      toggle.style.display = '';
+      GM_setValue(siteKey, false);
     });
 
     toggle.addEventListener('click', function () {
       if (toggle.classList.contains('was-dragged')) { toggle.classList.remove('was-dragged'); return; }
-      var isHidden = panel.classList.toggle('hidden');
-      GM_setValue(STORAGE_KEY, !isHidden);
-      if (!isHidden) refreshHeadings();
+      panel.classList.remove('hidden');
+      toggle.style.display = 'none';
+      GM_setValue(siteKey, true);
+      refreshHeadings();
+    });
+
+    // exclude this domain
+    document.getElementById('toc-exclude-btn').addEventListener('click', function () {
+      addExcludedDomain(location.hostname);
+      panel.remove();
+      toggle.remove();
+      showToast('\u5DF2\u7981\u7528\uFF1A' + location.hostname + '\uFF0C\u5237\u65B0\u9875\u9762\u751F\u6548');
     });
 
     enableToggleDrag(toggle);
