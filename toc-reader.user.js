@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         网页目录阅读器 (TOC Reader)
 // @namespace    https://github.com/JBC-JJM/chrome-toc-extension
-// @version      1.1.0
+// @version      1.2.0
 // @description  自动提取网页标题结构，生成悬浮目录面板，支持点击跳转、折叠展开、拖拽移动、智能主题
 // @author       JBC-JJM
 // @match        *://*/*
@@ -21,8 +21,9 @@
   const PANEL_ID = 'toc-reader-panel';
   const TOGGLE_ID = 'toc-reader-toggle';
   const STORAGE_KEY = 'toc_reader_visible';
-  const THEME_KEY = 'toc_reader_theme'; // auto | light | dark
+  const THEME_KEY = 'toc_reader_theme';
   const POSITION_KEY = 'toc_reader_position';
+  const COLLAPSE_KEY = 'toc_reader_collapse';
 
   // ─── 站点特定配置 ────────────────────────────────────────────────────────────
   const SITE_SETTINGS = {
@@ -55,10 +56,7 @@
     const hostname = location.hostname;
     const setting = SITE_SETTINGS[hostname];
     if (!setting) return null;
-
-    if (typeof setting === 'function') {
-      return setting();
-    }
+    if (typeof setting === 'function') return setting();
     return setting;
   }
 
@@ -116,7 +114,6 @@
       --toc-text: #f3f4f6;
       --toc-active-bg: #3730a3;
       --toc-active-color: #a5b4fc;
-      --toc-border-color: #4f46e5;
     }
     #${PANEL_ID}[colorscheme="dark"] .toc-item:hover {
       background: #374151;
@@ -126,6 +123,7 @@
       background: #3730a3;
       color: #a5b4fc;
     }
+    #${PANEL_ID}[colorscheme="dark"] .toc-collapse-btn { color: #9ca3af; }
 
     .toc-header {
       display: flex;
@@ -161,29 +159,11 @@
     }
     .toc-btn:hover { background: rgba(255,255,255,0.35); }
 
-    .toc-search {
-      padding: 8px 10px;
-      border-bottom: 1px solid var(--toc-border, #f3f4f6);
-    }
-    .toc-search input {
-      width: 100%;
-      box-sizing: border-box;
-      border: 1px solid var(--toc-border, #d1d5db);
-      border-radius: 6px;
-      padding: 5px 10px;
-      font-size: 12px;
-      outline: none;
-      transition: border-color 0.2s;
-      background: var(--toc-bg, #fff);
-      color: var(--toc-text, #374151);
-    }
-    .toc-search input:focus { border-color: var(--toc-active-color, #4f46e5); }
-
     .toc-body {
       overflow-y: auto;
       padding: 6px 0;
       flex: 1;
-      max-height: calc(70vh - 120px);
+      max-height: calc(70vh - 80px);
     }
     .toc-body::-webkit-scrollbar { width: 4px; }
     .toc-body::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 2px; }
@@ -191,7 +171,7 @@
     .toc-item {
       display: flex;
       align-items: center;
-      padding: 5px 14px;
+      padding: 6px 14px;
       cursor: pointer;
       color: var(--toc-text, #374151);
       line-height: 1.4;
@@ -209,22 +189,55 @@
       border-left-color: var(--toc-active-color, #4f46e5);
       font-weight: 600;
     }
-    .toc-item.hidden-item { display: none; }
 
-    .toc-level-badge {
-      flex-shrink: 0;
-      font-size: 10px;
-      font-weight: 700;
-      color: #9ca3af;
+    /* 折叠按钮 */
+    .toc-collapse-btn {
+      width: 16px;
+      height: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
       margin-right: 6px;
-      min-width: 18px;
+      color: #9ca3af;
+      cursor: pointer;
+      font-size: 10px;
+      transition: transform 0.2s;
+      flex-shrink: 0;
     }
+    .toc-collapse-btn:hover { color: var(--toc-active-color, #4f46e5); }
+    .toc-collapse-btn.collapsed { transform: rotate(-90deg); }
+    .toc-collapse-btn.empty { visibility: hidden; }
+
+    /* 标题级别标识 - 使用圆点 + 缩进 */
+    .toc-level-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      margin-right: 10px;
+      flex-shrink: 0;
+      background: #d1d5db;
+    }
+    .toc-item[data-level="1"] .toc-level-dot { background: #4f46e5; width: 8px; height: 8px; }
+    .toc-item[data-level="2"] .toc-level-dot { background: #7c3aed; }
+    .toc-item[data-level="3"] .toc-level-dot { background: #a855f7; }
+    .toc-item[data-level="4"] .toc-level-dot { background: #d946ef; }
+    .toc-item[data-level="5"] .toc-level-dot { background: #ec4899; }
+    .toc-item[data-level="6"] .toc-level-dot { background: #f43f5e; }
+
     .toc-item[data-level="1"] { padding-left: 14px; }
-    .toc-item[data-level="2"] { padding-left: 22px; }
-    .toc-item[data-level="3"] { padding-left: 30px; }
-    .toc-item[data-level="4"] { padding-left: 38px; }
-    .toc-item[data-level="5"] { padding-left: 46px; }
-    .toc-item[data-level="6"] { padding-left: 54px; }
+    .toc-item[data-level="2"] { padding-left: 24px; }
+    .toc-item[data-level="3"] { padding-left: 34px; }
+    .toc-item[data-level="4"] { padding-left: 44px; }
+    .toc-item[data-level="5"] { padding-left: 54px; }
+    .toc-item[data-level="6"] { padding-left: 64px; }
+
+    /* 子目录收起 */
+    .toc-item.has-children > .toc-text {
+      font-weight: 500;
+    }
+    .toc-children.collapsed {
+      display: none;
+    }
 
     .toc-empty {
       padding: 20px;
@@ -239,11 +252,6 @@
       font-size: 11px;
       color: #9ca3af;
       text-align: right;
-    }
-
-    .toc-highlight {
-      background: #fef08a;
-      border-radius: 2px;
     }
 
     #toc-reader-toast {
@@ -281,24 +289,13 @@
     showToast._timer = setTimeout(() => el.classList.remove('show'), duration);
   }
 
-  function escapeHtml(str) {
-    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  }
-
   function getHeadings() {
     const config = getSiteConfig();
-    const selector = config?.contentSelector
-      ? (typeof config.contentSelector === 'function'
-          ? config.contentSelector()
-          : config.contentSelector) + ' h1, ' + (typeof config.contentSelector === 'function' ? config.contentSelector() : config.contentSelector) + ' h2, ' + (typeof config.contentSelector === 'function' ? config.contentSelector() : config.contentSelector) + ' h3, ' + (typeof config.contentSelector === 'function' ? config.contentSelector() : config.contentSelector) + ' h4, ' + (typeof config.contentSelector === 'function' ? config.contentSelector() : config.contentSelector) + ' h5, ' + (typeof config.contentSelector === 'function' ? config.contentSelector() : config.contentSelector) + ' h6'
-      : 'h1, h2, h3, h4, h5, h6';
-
     const root = config?.contentSelector
       ? document.querySelector(typeof config.contentSelector === 'function' ? config.contentSelector() : config.contentSelector)
       : document.body;
 
     if (!root) return [];
-
     const nodes = Array.from(root.querySelectorAll('h1, h2, h3, h4, h5, h6'));
     return nodes.filter(el => {
       const text = el.textContent.trim();
@@ -347,12 +344,10 @@
         <div class="toc-header-title">📋 目录</div>
         <div class="toc-header-actions">
           <button class="toc-btn" id="toc-theme-btn" title="切换主题">🌙</button>
+          <button class="toc-btn" id="toc-collapse-btn" title="折叠/展开">▾</button>
           <button class="toc-btn" id="toc-refresh-btn" title="刷新">↺</button>
           <button class="toc-btn" id="toc-close-btn" title="关闭">✕</button>
         </div>
-      </div>
-      <div class="toc-search">
-        <input type="text" id="toc-search-input" placeholder="搜索标题…" />
       </div>
       <div class="toc-body" id="toc-body"></div>
       <div class="toc-footer" id="toc-footer">共 0 个标题</div>
@@ -371,14 +366,43 @@
 
   // ─── 渲染目录列表 ─────────────────────────────────────────────────────────────
   let headingData = [];
-  let currentQuery = '';
+  let allCollapsed = false;
 
-  function renderToc(query = '') {
+  function buildTocTree(headings) {
+    const tree = [];
+    const stack = [];
+
+    headings.forEach((heading, idx) => {
+      const node = {
+        level: heading.level,
+        text: heading.text,
+        id: heading.id,
+        children: [],
+        parent: null
+      };
+
+      while (stack.length > 0 && stack[stack.length - 1].level >= heading.level) {
+        stack.pop();
+      }
+
+      if (stack.length === 0) {
+        tree.push(node);
+      } else {
+        stack[stack.length - 1].children.push(node);
+        node.parent = stack[stack.length - 1];
+      }
+
+      stack.push(node);
+    });
+
+    return tree;
+  }
+
+  function renderToc() {
     const body = document.getElementById('toc-body');
     const footer = document.getElementById('toc-footer');
     if (!body) return;
 
-    currentQuery = query;
     body.innerHTML = '';
 
     if (headingData.length === 0) {
@@ -387,43 +411,67 @@
       return;
     }
 
-    const lowerQ = query.toLowerCase();
-    let visibleCount = 0;
+    const tree = buildTocTree(headingData);
+    renderTree(tree, body, 0);
 
-    headingData.forEach(({ level, text, id }) => {
+    footer.textContent = `共 ${headingData.length} 个标题`;
+  }
+
+  function renderTree(nodes, container, depth) {
+    nodes.forEach(node => {
       const item = document.createElement('div');
       item.className = 'toc-item';
-      item.dataset.level = level;
-      item.dataset.id = id;
+      item.dataset.level = node.level;
+      item.dataset.id = node.id;
 
-      const badge = document.createElement('span');
-      badge.className = 'toc-level-badge';
-      badge.textContent = `H${level}`;
-
-      const label = document.createElement('span');
-      label.textContent = text;
-
-      item.appendChild(badge);
-      item.appendChild(label);
-
-      if (lowerQ && !text.toLowerCase().includes(lowerQ)) {
-        item.classList.add('hidden-item');
+      // 折叠按钮
+      const collapseBtn = document.createElement('span');
+      collapseBtn.className = 'toc-collapse-btn';
+      if (node.children.length > 0) {
+        collapseBtn.innerHTML = '▼';
+        collapseBtn.title = '点击折叠/展开';
+        collapseBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const childContainer = item.nextElementSibling;
+          if (childContainer && childContainer.classList.contains('toc-children')) {
+            childContainer.classList.toggle('collapsed');
+            collapseBtn.classList.toggle('collapsed');
+          }
+        });
       } else {
-        visibleCount++;
+        collapseBtn.className += ' empty';
       }
+
+      // 级别圆点
+      const dot = document.createElement('span');
+      dot.className = 'toc-level-dot';
+
+      // 标题文字
+      const text = document.createElement('span');
+      text.className = 'toc-text';
+      text.textContent = node.text;
+
+      item.appendChild(collapseBtn);
+      item.appendChild(dot);
+      item.appendChild(text);
 
       item.addEventListener('click', () => {
         document.querySelectorAll('.toc-item').forEach(i => i.classList.remove('active'));
         item.classList.add('active');
-        scrollToHeading(id);
+        scrollToHeading(node.id);
       });
 
-      body.appendChild(item);
-    });
+      container.appendChild(item);
 
-    footer.textContent = query
-      ? `找到 ${visibleCount} / ${headingData.length} 个标题`
-      : `共 ${headingData.length} 个标题`;
+      // 渲染子节点
+      if (node.children.length > 0) {
+        const childContainer = document.createElement('div');
+        childContainer.className = 'toc-children';
+        if (allCollapsed) childContainer.classList.add('collapsed');
+        container.appendChild(childContainer);
+        renderTree(node.children, childContainer, depth + 1);
+      }
+    });
   }
 
   function refreshHeadings() {
@@ -433,8 +481,15 @@
       text: el.textContent.trim(),
       id: ensureId(el, idx),
     }));
-    renderToc(document.getElementById('toc-search-input')?.value || '');
+    renderToc();
     showToast(`已刷新，找到 ${headingData.length} 个标题`);
+  }
+
+  function toggleAll() {
+    allCollapsed = !allCollapsed;
+    GM_setValue(COLLAPSE_KEY, allCollapsed);
+    renderToc();
+    showToast(allCollapsed ? '已全部折叠' : '已全部展开');
   }
 
   // ─── 拖拽逻辑 ─────────────────────────────────────────────────────────────────
@@ -464,7 +519,6 @@
     document.addEventListener('mouseup', () => {
       if (!dragging) return;
       dragging = false;
-      // 保存位置
       const rect = panel.getBoundingClientRect();
       GM_setValue(POSITION_KEY, { left: rect.left, top: rect.top });
     });
@@ -472,7 +526,7 @@
 
   // ─── 滚动高亮当前标题 ─────────────────────────────────────────────────────────
   function setupScrollSpy() {
-    const offset = 100; // 偏移量
+    const offset = 100;
     const onScroll = () => {
       const scrollY = window.scrollY + offset;
       let current = null;
@@ -492,7 +546,6 @@
     };
 
     window.addEventListener('scroll', onScroll, { passive: true });
-    // 初始执行一次
     setTimeout(onScroll, 500);
   }
 
@@ -548,6 +601,7 @@
     GM_registerMenuCommand(`${mark('light')}主题: 亮色模式`, () => setTheme('light'));
     GM_registerMenuCommand(`${mark('dark')}主题: 暗色模式`, () => setTheme('dark'));
     GM_registerMenuCommand('🔄 刷新目录', refreshHeadings);
+    GM_registerMenuCommand('⤵️ 折叠/展开全部', toggleAll);
   }
 
   // ─── 初始化 ────────────────────────────────────────────────────────────────────
@@ -571,6 +625,9 @@
     const visible = GM_getValue(STORAGE_KEY, true);
     if (!visible) panel.classList.add('hidden');
 
+    // 读取折叠状态
+    allCollapsed = GM_getValue(COLLAPSE_KEY, false);
+
     // 首次加载目录
     refreshHeadings();
 
@@ -584,13 +641,11 @@
     setTheme(GM_getValue(THEME_KEY, 'auto'), false);
     initThemeListener();
 
-    // 搜索
-    document.getElementById('toc-search-input').addEventListener('input', e => {
-      renderToc(e.target.value.trim());
-    });
-
     // 刷新按钮
     document.getElementById('toc-refresh-btn').addEventListener('click', refreshHeadings);
+
+    // 折叠/展开按钮
+    document.getElementById('toc-collapse-btn').addEventListener('click', toggleAll);
 
     // 主题按钮
     document.getElementById('toc-theme-btn').addEventListener('click', cycleTheme);
