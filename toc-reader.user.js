@@ -634,6 +634,10 @@
       item.addEventListener('click', () => {
         document.querySelectorAll('.toc-item').forEach(i => i.classList.remove('active'));
         item.classList.add('active');
+        // 暂停滚动跟随展开 2 秒，避免覆盖用户手动折叠状态
+        scrollFollowPaused = true;
+        clearTimeout(setupScrollSpy._resumeTimer);
+        setupScrollSpy._resumeTimer = setTimeout(() => { scrollFollowPaused = false; }, 2000);
         scrollToHeading(node.id);
       });
 
@@ -758,10 +762,12 @@
 
   // ─── 滚动高亮 + 自动展开 ──────────────────────────────────────────────────────
   let lastActiveId = null;
+  let scrollFollowPaused = false; // 点击跳转后暂停自动展开
 
   function setupScrollSpy() {
     const offset = 100;
     const onScroll = () => {
+      // 高亮当前标题（始终执行）
       const scrollY = window.scrollY + offset;
       let current = null;
 
@@ -781,7 +787,8 @@
         item.classList.toggle('active', item.dataset.id === current);
       });
 
-      if (current) {
+      // 只有非暂停状态才自动展开路径
+      if (current && !scrollFollowPaused) {
         expandPathForId(current);
         const activeItem = document.querySelector(`.toc-item[data-id="${current}"]`);
         if (activeItem) {
