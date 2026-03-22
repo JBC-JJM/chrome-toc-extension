@@ -752,8 +752,12 @@
 
     const savedPos = GM_getValue(TOGGLE_POS_KEY, null);
     if (savedPos) {
-      btn.style.top = savedPos.top + 'px';
-      btn.style.right = savedPos.right + 'px';
+      const top = parseInt(savedPos.top);
+      // 如果保存的位置超出屏幕，忽略它
+      if (!isNaN(top) && top >= 0 && top <= window.innerHeight) {
+        btn.style.top = savedPos.top + 'px';
+        btn.style.right = savedPos.right + 'px';
+      }
     }
 
     btn.addEventListener('mousedown', e => {
