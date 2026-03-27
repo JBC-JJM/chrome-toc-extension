@@ -420,7 +420,7 @@
   }
 
   function getHeadingText(el) {
-    var itTarget = el.querySelector('.immersive-translate-target-wrapper .immersive-translate-target') || 
+    var itTarget = el.querySelector('.immersive-translate-target-wrapper .immersive-translate-target') ||
                    el.querySelector('.immersive-translate-target');
     if (itTarget && itTarget.innerText && itTarget.innerText.trim()) {
       return itTarget.innerText.trim().replace(/\s+/g, ' ');
@@ -449,7 +449,7 @@
     var config = getSiteConfig();
     var customOffset = (config && typeof config.offset === 'number') ? config.offset : 0;
     var maxH = 0;
-    
+
     var selectors = ['header', 'nav', '.header', '.navbar', '.AppHeader', '#header', '#csdn-toolbar'];
     document.querySelectorAll(selectors.join(',')).forEach(function (el) {
       var rect = el.getBoundingClientRect();
@@ -468,7 +468,7 @@
         maxH = Math.max(maxH, topEl.getBoundingClientRect().height);
       }
     }
-    
+
     return Math.max(customOffset, maxH) + 15;
   }
 
@@ -617,3 +617,341 @@
     function findParent(nodes, targetId, currentPath) {
       for (var i = 0; i < nodes.length; i++) {
         var node = nodes[i];
+        if (node.id === targetId) return currentPath.concat(node.id);
+        if (node.children.length > 0) {
+          var result = findParent(node.children, targetId, currentPath.concat(node.id));
+          if (result) return result;
+        }
+      }
+      return null;
+    }
+    return findParent(treeData, nodeId, []) || [nodeId];
+  }
+
+  function refreshHeadings() {
+    var headings = getHeadings();
+    headingData = headings.map(function (el, idx) {
+      return {
+        level: parseInt(el.tagName[1]),
+        text: getHeadingText(el),
+        id: ensureId(el, idx),
+        el: el
+      };
+    });
+    renderToc();
+    var panel = document.getElementById(PANEL_ID);
+    if (headingData.length === 0 && panel && !panel.classList.contains('hidden')) {
+      panel.classList.add('hidden');
+    }
+  }
+
+  // ─── 拖拽逻辑 ─────────────────────────────────────────────────────────────────
+  function enableDrag(panel, handle) {
+    var dragging = false, ox = 0, oy = 0;
+    handle.addEventListener('mousedown', function (e) {
+      if (e.target.closest('.toc-btn')) return;
+      dragging = true;
+      var rect = panel.getBoundingClientRect();
+      ox = e.clientX - rect.left;
+      oy = e.clientY - rect.top;
+      e.preventDefault();
+    });
+    document.addEventListener('mousemove', function (e) {
+      if (!dragging) return;
+      var x = Math.max(0, Math.min(window.innerWidth - panel.offsetWidth, e.clientX - ox));
+      var y = Math.max(0, Math.min(window.innerHeight - panel.offsetHeight, e.clientY - oy));
+      panel.style.left = x + 'px';
+      panel.style.top = y + 'px';
+      panel.style.right = 'auto';
+    });
+    document.addEventListener('mouseup', function () {
+      if (!dragging) return;
+      dragging = false;
+      var rect = panel.getBoundingClientRect();
+      GM_setValue(getSitePositionKey(), { left: rect.left, top: rect.top });
+    });
+  }
+
+  function enableResize(panel) {
+    var handle = document.getElementById('toc-resize-handle');
+    if (!handle) return;
+    var resizing = false, startX = 0, startY = 0, startW = 0, startH = 0;
+    handle.addEventListener('mousedown', function (e) {
+      e.preventDefault(); e.stopPropagation();
+      resizing = true;
+      startX = e.clientX; startY = e.clientY;
+      startW = panel.offsetWidth; startH = panel.offsetHeight;
+    });
+    document.addEventListener('mousemove', function (e) {
+      if (!resizing) return;
+      panel.style.width = Math.max(200, Math.min(520, startW + e.clientX - startX)) + 'px';
+      panel.style.height = Math.max(200, Math.min(window.innerHeight * 0.9, startH + e.clientY - startY)) + 'px';
+    });
+    document.addEventListener('mouseup', function () {
+      if (!resizing) return;
+      resizing = false;
+      GM_setValue(getSiteSizeKey(), { width: panel.style.width, height: panel.style.height });
+    });
+  }
+
+  // ─── 滚动高亮 + 自动展开 ──────────────────────────────────────────────────────
+  var lastActiveId = null;
+  var scrollFollowPaused = false;
+  var scrollPauseTimer = null;
+
+  function setupScrollSpy() {
+    var onScroll = function () {
+      var fh = getFixedHeaderHeight();
+      var scrollY = window.scrollY + fh + 20;
+      var current = null;
+      for (var i = headingData.length - 1; i >= 0; i--) {
+        var id = headingData[i].id;
+        var el = document.getElementById(id);
+        if (el && (window.scrollY + el.getBoundingClientRect().top) <= scrollY) {
+          current = id;
+          break;
+        }
+      }
+      if (current === lastActiveId) return;
+      lastActiveId = current;
+      document.querySelectorAll('.toc-item').forEach(function (item) {
+        item.classList.toggle('active', item.dataset.id === current);
+      });
+      if (current && !scrollFollowPaused) {
+        expandPathForId(current);
+        var activeItem = document.querySelector('.toc-item[data-id="' + current + '"]');
+        if (activeItem) activeItem.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      }
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    setTimeout(onScroll, 500);
+  }
+
+  function expandPathForId(nodeId) {
+    var path = getNodePath(nodeId);
+    path.forEach(function (id) {
+      var item = document.querySelector('.toc-item[data-id="' + id + '"]');
+      if (item) {
+        var childContainer = item.nextElementSibling;
+        if (childContainer && childContainer.classList.contains('toc-children') && childContainer.classList.contains('collapsed')) {
+          childContainer.classList.remove('collapsed');
+          var btn = item.querySelector('.toc-collapse-btn');
+          if (btn) btn.classList.remove('collapsed');
+        }
+      }
+    });
+  }
+
+  // ─── 主题管理 ─────────────────────────────────────────────────────────────────
+  function setTheme(mode, persist) {
+    var panel = document.getElementById(PANEL_ID);
+    var toggleBtn = document.getElementById('toc-theme-btn');
+    if (!panel || !toggleBtn) return;
+    var isDark;
+    if (mode === 'auto') {
+      isDark = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) || false;
+    } else {
+      isDark = mode === 'dark';
+    }
+    panel.setAttribute('colorscheme', isDark ? 'dark' : 'light');
+    toggleBtn.textContent = isDark ? '\u2600\uFE0F' : '\uD83C\uDF19';
+    if (persist !== false) GM_setValue(THEME_KEY, mode);
+  }
+
+  function cycleTheme() {
+    var current = GM_getValue(THEME_KEY, 'auto');
+    var modes = ['auto', 'light', 'dark'];
+    var next = modes[(modes.indexOf(current) + 1) % modes.length];
+    setTheme(next);
+    showToast(next === 'auto' ? '\u4E3B\u9898: \u8DDF\u968F\u7CFB\u7EDF' : next === 'light' ? '\u4E3B\u9898: \u4EAE\u8272' : '\u4E3B\u9898: \u6697\u8272');
+  }
+
+  function initThemeListener() {
+    if (!window.matchMedia) return;
+    var mql = window.matchMedia('(prefers-color-scheme: dark)');
+    if (mql.addEventListener) mql.addEventListener('change', function () {
+      if (GM_getValue(THEME_KEY, 'auto') === 'auto') setTheme('auto', false);
+    });
+  }
+
+  // ─── 排除域名管理 ──────────────────────────────────────────────────────────────
+  function getExcludedDomains() {
+    return GM_getValue(EXCLUDED_DOMAINS_KEY, []);
+  }
+  function addExcludedDomain(domain) {
+    var list = getExcludedDomains();
+    if (list.indexOf(domain) === -1) { list.push(domain); GM_setValue(EXCLUDED_DOMAINS_KEY, list); }
+  }
+  function removeExcludedDomain(domain) {
+    var list = getExcludedDomains();
+    list = list.filter(function (d) { return d !== domain; });
+    GM_setValue(EXCLUDED_DOMAINS_KEY, list);
+  }
+  function isDomainExcluded() {
+    var domain = location.hostname;
+    return getExcludedDomains().indexOf(domain) !== -1;
+  }
+
+  // ─── 菜单命令 ─────────────────────────────────────────────────────────────────
+  function initMenu() {
+    if (typeof GM_registerMenuCommand !== 'function') return;
+
+    var excluded = isDomainExcluded();
+    var toggleCommandName = excluded ? '✅ 启用本站目录 (移除排除)' : '❌ 禁用本站目录 (加入排除)';
+
+    GM_registerMenuCommand(toggleCommandName, function () {
+      if (excluded) {
+        removeExcludedDomain(location.hostname);
+        showToast('已启用本站目录，即将刷新页面');
+      } else {
+        addExcludedDomain(location.hostname);
+        showToast('已禁用本站目录，即将刷新页面');
+      }
+      setTimeout(function() { location.reload(); }, 1000);
+    });
+
+    if (excluded) return;
+
+    GM_registerMenuCommand('\u4E3B\u9898: \u8DDF\u968F\u7CFB\u7EDF', function () { setTheme('auto'); });
+    GM_registerMenuCommand('\u4E3B\u9898: \u4EAE\u8272', function () { setTheme('light'); });
+    GM_registerMenuCommand('\u4E3B\u9898: \u6697\u8272', function () { setTheme('dark'); });
+    GM_registerMenuCommand('\u5237\u65B0\u76EE\u5F55', refreshHeadings);
+  }
+
+  // ─── 悬浮按钮拖拽 ───────────────────────────────────────────────────────────
+  function enableToggleDrag(btn) {
+    var dragging = false, hasMoved = false, startX = 0, startY = 0, startTop = 0;
+    var savedPos = GM_getValue(TOGGLE_POS_KEY, null);
+    if (savedPos) {
+      var top = parseInt(savedPos.top);
+      if (!isNaN(top) && top >= 0 && top <= window.innerHeight) {
+        btn.style.top = savedPos.top + 'px';
+        btn.style.right = savedPos.right + 'px';
+      }
+    }
+    btn.addEventListener('mousedown', function (e) {
+      dragging = true; hasMoved = false;
+      startX = e.clientX; startY = e.clientY;
+      startTop = btn.getBoundingClientRect().top;
+      btn.classList.add('dragging');
+      e.preventDefault();
+    });
+    document.addEventListener('mousemove', function (e) {
+      if (!dragging) return;
+      var dx = e.clientX - startX, dy = e.clientY - startY;
+      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) hasMoved = true;
+      if (!hasMoved) return;
+      btn.style.top = Math.max(0, Math.min(window.innerHeight - btn.offsetHeight, startTop + dy)) + 'px';
+      btn.style.transform = 'none';
+    });
+    document.addEventListener('mouseup', function () {
+      if (!dragging) return;
+      dragging = false;
+      btn.classList.remove('dragging');
+      if (hasMoved) {
+        btn.classList.add('was-dragged');
+        GM_setValue(TOGGLE_POS_KEY, { top: btn.style.top, right: btn.style.right });
+      }
+    });
+  }
+
+  // ─── 初始化 ────────────────────────────────────────────────────────────────────
+  function init() {
+    initMenu();
+
+    if (document.getElementById(PANEL_ID)) return;
+    if (isDomainExcluded()) return;
+
+    var panel = buildPanel();
+    var toggle = buildToggleBtn();
+    document.body.appendChild(panel);
+    document.body.appendChild(toggle);
+
+    // 载入本站独立记录的位置和大小
+    var savedPos = GM_getValue(getSitePositionKey(), null);
+    if (savedPos) {
+      panel.style.left = savedPos.left + 'px';
+      panel.style.top = savedPos.top + 'px';
+      panel.style.right = 'auto';
+    }
+    var savedSize = GM_getValue(getSiteSizeKey(), null);
+    if (savedSize) {
+      if (savedSize.width) panel.style.width = savedSize.width;
+      if (savedSize.height) panel.style.height = savedSize.height;
+    }
+
+    var siteKey = getSiteVisibleKey();
+    var visible = GM_getValue(siteKey, null);
+    if (visible === null) visible = true;
+    if (!visible) {
+      panel.classList.add('hidden');
+      toggle.style.display = '';
+    } else {
+      toggle.style.display = 'none';
+    }
+
+    refreshHeadings();
+    enableDrag(panel, document.getElementById('toc-drag-handle'));
+    enableResize(panel);
+    setupScrollSpy();
+    setTheme(GM_getValue(THEME_KEY, 'auto'), false);
+    initThemeListener();
+
+    // 绑定禁止本站按钮事件 (锁按钮)
+    document.getElementById('toc-lock-btn').addEventListener('click', function () {
+      addExcludedDomain(location.hostname);
+      document.getElementById(PANEL_ID).remove();
+      document.getElementById(TOGGLE_ID).remove();
+      showToast('\u5DF2\u7981\u6B62\u5728\u672C\u7AD9\u542F\u7528\uFF0C\u53EF\u901A\u8FC7\u83DC\u5355\u6062\u590D'); // 显示提示：已禁止在本站启用...
+    });
+
+    document.getElementById('toc-refresh-btn').addEventListener('click', refreshHeadings);
+
+    document.getElementById('toc-collapse-btn').addEventListener('click', function () {
+      var allCollapsed = document.querySelectorAll('.toc-children.collapsed').length > 0;
+      document.querySelectorAll('.toc-children').forEach(function (el) { el.classList.toggle('collapsed', !allCollapsed); });
+      document.querySelectorAll('.toc-collapse-btn').forEach(function (btn) {
+        if (!btn.classList.contains('empty')) btn.classList.toggle('collapsed', !allCollapsed);
+      });
+      showToast(allCollapsed ? '\u5DF2\u5168\u90E8\u5C55\u5F00' : '\u5DF2\u5168\u90E8\u6298\u53E0');
+    });
+
+    document.getElementById('toc-theme-btn').addEventListener('click', cycleTheme);
+
+    document.getElementById('toc-close-btn').addEventListener('click', function () {
+      panel.classList.add('hidden');
+      toggle.style.display = '';
+      GM_setValue(siteKey, false);
+    });
+
+    var headerEl = document.getElementById('toc-drag-handle');
+    headerEl.addEventListener('dblclick', function (e) {
+      if (e.target.closest('.toc-btn')) return;
+      panel.classList.add('hidden');
+      toggle.style.display = '';
+      GM_setValue(siteKey, false);
+    });
+
+    toggle.addEventListener('click', function () {
+      if (toggle.classList.contains('was-dragged')) { toggle.classList.remove('was-dragged'); return; }
+      panel.classList.remove('hidden');
+      toggle.style.display = 'none';
+      GM_setValue(siteKey, true);
+      refreshHeadings();
+    });
+
+    enableToggleDrag(toggle);
+
+    var lastUrl = location.href;
+    new MutationObserver(function () {
+      if (location.href !== lastUrl) { lastUrl = location.href; setTimeout(refreshHeadings, 800); }
+    }).observe(document.body, { childList: true, subtree: true });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+
+})();
