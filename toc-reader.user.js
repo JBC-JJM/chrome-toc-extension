@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         网页目录阅读器 (TOC Reader) - 修复增强版
+// @name         网页目录阅读器 (TOC Reader) 
 // @namespace    https://github.com/JBC-JJM/chrome-toc-extension
 // @version      1.9.0
 // @description  自动提取网页标题结构，生成悬浮目录面板，支持点击跳转、折叠展开、拖拽移动、智能主题、独立记忆位置大小、文本格式统一隔离
