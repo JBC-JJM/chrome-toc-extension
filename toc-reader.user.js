@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         网页目录阅读器 (TOC Reader) - 修复增强版
 // @namespace    https://github.com/JBC-JJM/chrome-toc-extension
-// @version      1.8.1
-// @description  自动提取网页标题结构，生成悬浮目录面板，支持点击跳转、折叠展开、拖拽移动、智能主题、锁定跟随
+// @version      1.9.0
+// @description  自动提取网页标题结构，生成悬浮目录面板，支持点击跳转、折叠展开、拖拽移动、智能主题、独立记忆位置大小、文本格式统一隔离
 // @author       JBC-JJM
 // @match        *://*/*
 // @grant        GM_addStyle
@@ -23,23 +23,26 @@
   const STORAGE_KEY = 'toc_reader_visible';
   const THEME_KEY = 'toc_reader_theme';
   const POSITION_KEY = 'toc_reader_position';
-  const COLLAPSE_KEY = 'toc_reader_collapse';
   const SIZE_KEY = 'toc_reader_size';
   const TOGGLE_POS_KEY = 'toc_reader_toggle_pos';
   const SITE_VISIBLE_KEY = 'toc_reader_site_visible_';
-  const SCRIPT_VERSION = '1.8.1';
+  const SCRIPT_VERSION = '1.9.0';
   const EXCLUDED_DOMAINS_KEY = 'toc_reader_excluded_domains';
 
-  // 全局锁定状态
-  let isTocLocked = false;
+  // ─── 动态存储键（针对当前域名独立记录） ───────────────────────────────────────────
+  function getSitePositionKey() { return POSITION_KEY + '_' + location.hostname; }
+  function getSiteSizeKey() { return SIZE_KEY + '_' + location.hostname; }
+  function getSiteVisibleKey() { return SITE_VISIBLE_KEY + location.hostname; }
 
   // ─── 站点特定配置 ────────────────────────────────────────────────────────────
   const SITE_SETTINGS = {
     'jianshu.com': { contentSelector: '.ouvJEz', offset: 20 },
-    'zhuanlan.zhihu.com': { contentSelector: 'article', offset: 52 },
-    'www.zhihu.com': { contentSelector: '.reader-chapter-content', offset: 52 },
+    'zhuanlan.zhihu.com': { contentSelector: 'article', offset: 56 },
+    'www.zhihu.com': { contentSelector: '.reader-chapter-content', offset: 56 },
     'mp.weixin.qq.com': { contentSelector: '.rich_media_content', offset: 20 },
     'cnodejs.org': { contentSelector: '#content', offset: 20 },
+    'blog.csdn.net': { contentSelector: '#mainBox', offset: 60 },
+    'www.csdn.net': { offset: 60 },
     'juejin.cn': {
       contentSelector: function () { return location.pathname.includes('/book/') ? '.book-body' : '.article'; },
       offset: 20
@@ -67,6 +70,11 @@
 
   // ─── 样式注入 ─────────────────────────────────────────────────────────────────
   var TOCReaderStyle = '\n\
+    /* ── 强制格式统一与全局盒模型 ── */\n\
+    #' + PANEL_ID + ' * {\n\
+      box-sizing: border-box !important;\n\
+    }\n\
+\n\
     /* ── 悬浮按钮 ── */\n\
     #' + TOGGLE_ID + ' {\n\
       position: fixed;\n\
@@ -257,12 +265,27 @@
       border-left-color: var(--toc-active-color, #4f46e5);\n\
       font-weight: 600;\n\
     }\n\
+\n\
+    /* 强力隔离网页文本样式干扰 */\n\
     .toc-text {\n\
-      overflow: hidden;\n\
-      text-overflow: ellipsis;\n\
-      white-space: nowrap;\n\
-      flex: 1;\n\
-      min-width: 0;\n\
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif !important;\n\
+      font-size: inherit !important;\n\
+      font-weight: inherit !important;\n\
+      font-style: normal !important;\n\
+      text-decoration: none !important;\n\
+      text-transform: none !important;\n\
+      letter-spacing: normal !important;\n\
+      word-spacing: normal !important;\n\
+      line-height: 1.5 !important;\n\
+      background: transparent !important;\n\
+      color: inherit !important;\n\
+      margin: 0 !important;\n\
+      padding: 0 !important;\n\
+      overflow: hidden !important;\n\
+      text-overflow: ellipsis !important;\n\
+      white-space: nowrap !important;\n\
+      flex: 1 !important;\n\
+      min-width: 0 !important;\n\
     }\n\
 \n\
     /* ── 折叠按钮 ── */\n\
@@ -359,17 +382,12 @@
     showToast._timer = setTimeout(function () { el.classList.remove('show'); }, duration);
   }
 
-  // 1. 强力检测元素是否真实在页面上可见
   function isVisible(el) {
     if (!el) return false;
-    // 检测是否被 CSS 彻底隐藏
     var style = window.getComputedStyle(el);
     if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
-    
-    // 物理尺寸检测 (针对 GreasyFork 等 Tab 隐藏元素)
     var rect = el.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return false;
-    
     return true;
   }
 
@@ -387,7 +405,6 @@
     var nodes = Array.from(root.querySelectorAll('h1, h2, h3, h4, h5, h6'));
     return nodes.filter(function (el) {
       var text = getHeadingText(el);
-      // 同时满足可见性验证、文字验证、长度合理
       return isVisible(el) && isValidHeadingText(text) && text.length < 300;
     });
   }
@@ -428,14 +445,12 @@
     return el.id;
   }
 
-  // 3. 智能检测页面顶部固定元素高度（混合自定义偏移与动态计算，参考 Toc Bar）
   function getFixedHeaderHeight() {
     var config = getSiteConfig();
     var customOffset = (config && typeof config.offset === 'number') ? config.offset : 0;
     var maxH = 0;
     
-    // 方案 A: 匹配常见头部元素标签
-    var selectors = ['header', 'nav', '.header', '.navbar', '.AppHeader', '#header'];
+    var selectors = ['header', 'nav', '.header', '.navbar', '.AppHeader', '#header', '#csdn-toolbar'];
     document.querySelectorAll(selectors.join(',')).forEach(function (el) {
       var rect = el.getBoundingClientRect();
       if (rect.top <= 10 && rect.width > window.innerWidth * 0.5 && rect.height > 10 && rect.height < 250) {
@@ -446,7 +461,6 @@
       }
     });
 
-    // 方案 B: 在屏幕顶部正中心抓取元素进行检测
     var topEl = document.elementFromPoint(window.innerWidth / 2, 5);
     if (topEl && topEl.tagName !== 'BODY' && topEl.tagName !== 'HTML') {
       var style = window.getComputedStyle(topEl);
@@ -455,7 +469,6 @@
       }
     }
     
-    // 采用最大值，加上基础缓冲间距
     return Math.max(customOffset, maxH) + 15;
   }
 
@@ -477,7 +490,7 @@
     panel.innerHTML = '<div class="toc-header" id="toc-drag-handle">' +
       '<div class="toc-header-title"><span style="font-size:14px">\u2630</span> \u76EE\u5F55</div>' +
       '<div class="toc-header-actions">' +
-      '<button class="toc-btn" id="toc-lock-btn" title="\u9501\u5B9A\u76EE\u5F55\u8DDF\u968F">\uD83D\uDD13</button>' + // 🔓
+      '<button class="toc-btn" id="toc-lock-btn" title="\u7981\u6B62\u5728\u672C\u7AD9\u542F\u7528">\uD83D\uDD12</button>' + // 🔒 表示禁止
       '<button class="toc-btn" id="toc-theme-btn" title="\u5207\u6362\u4E3B\u9898">\uD83C\uDF19</button>' +
       '<button class="toc-btn" id="toc-collapse-btn" title="\u6298\u53E0/\u5C55\u5F00">\u25BE</button>' +
       '<button class="toc-btn" id="toc-refresh-btn" title="\u5237\u65B0">\u21BA</button>' +
@@ -574,7 +587,6 @@
       item.addEventListener('click', function () {
         document.querySelectorAll('.toc-item').forEach(function (i) { i.classList.remove('active'); });
         item.classList.add('active');
-        // 暂停滚动跟随展开 2 秒
         scrollFollowPaused = true;
         clearTimeout(scrollPauseTimer);
         scrollPauseTimer = setTimeout(function () { scrollFollowPaused = false; }, 2000);
@@ -605,345 +617,3 @@
     function findParent(nodes, targetId, currentPath) {
       for (var i = 0; i < nodes.length; i++) {
         var node = nodes[i];
-        if (node.id === targetId) return currentPath.concat(node.id);
-        if (node.children.length > 0) {
-          var result = findParent(node.children, targetId, currentPath.concat(node.id));
-          if (result) return result;
-        }
-      }
-      return null;
-    }
-    return findParent(treeData, nodeId, []) || [nodeId];
-  }
-
-  function refreshHeadings() {
-    var headings = getHeadings();
-    headingData = headings.map(function (el, idx) {
-      return {
-        level: parseInt(el.tagName[1]),
-        text: getHeadingText(el),
-        id: ensureId(el, idx),
-        el: el
-      };
-    });
-    renderToc();
-    var panel = document.getElementById(PANEL_ID);
-    if (headingData.length === 0 && panel && !panel.classList.contains('hidden')) {
-      panel.classList.add('hidden');
-    }
-  }
-
-  // ─── 拖拽逻辑 ─────────────────────────────────────────────────────────────────
-  function enableDrag(panel, handle) {
-    var dragging = false, ox = 0, oy = 0;
-    handle.addEventListener('mousedown', function (e) {
-      if (e.target.closest('.toc-btn')) return;
-      dragging = true;
-      var rect = panel.getBoundingClientRect();
-      ox = e.clientX - rect.left;
-      oy = e.clientY - rect.top;
-      e.preventDefault();
-    });
-    document.addEventListener('mousemove', function (e) {
-      if (!dragging) return;
-      var x = Math.max(0, Math.min(window.innerWidth - panel.offsetWidth, e.clientX - ox));
-      var y = Math.max(0, Math.min(window.innerHeight - panel.offsetHeight, e.clientY - oy));
-      panel.style.left = x + 'px';
-      panel.style.top = y + 'px';
-      panel.style.right = 'auto';
-    });
-    document.addEventListener('mouseup', function () {
-      if (!dragging) return;
-      dragging = false;
-      var rect = panel.getBoundingClientRect();
-      GM_setValue(POSITION_KEY, { left: rect.left, top: rect.top });
-    });
-  }
-
-  function enableResize(panel) {
-    var handle = document.getElementById('toc-resize-handle');
-    if (!handle) return;
-    var resizing = false, startX = 0, startY = 0, startW = 0, startH = 0;
-    handle.addEventListener('mousedown', function (e) {
-      e.preventDefault(); e.stopPropagation();
-      resizing = true;
-      startX = e.clientX; startY = e.clientY;
-      startW = panel.offsetWidth; startH = panel.offsetHeight;
-    });
-    document.addEventListener('mousemove', function (e) {
-      if (!resizing) return;
-      panel.style.width = Math.max(200, Math.min(520, startW + e.clientX - startX)) + 'px';
-      panel.style.height = Math.max(200, Math.min(window.innerHeight * 0.9, startH + e.clientY - startY)) + 'px';
-    });
-    document.addEventListener('mouseup', function () {
-      if (!resizing) return;
-      resizing = false;
-      GM_setValue(SIZE_KEY, { width: panel.style.width, height: panel.style.height });
-    });
-  }
-
-  // ─── 滚动高亮 + 自动展开 ──────────────────────────────────────────────────────
-  var lastActiveId = null;
-  var scrollFollowPaused = false;
-  var scrollPauseTimer = null;
-
-  function setupScrollSpy() {
-    var onScroll = function () {
-      // 2. 只有在未锁定且未因点击暂停跟随的情况下，才触发目录高亮更新
-      if (isTocLocked) return;
-
-      var fh = getFixedHeaderHeight();
-      var scrollY = window.scrollY + fh + 20; 
-      var current = null;
-      for (var i = headingData.length - 1; i >= 0; i--) {
-        var id = headingData[i].id;
-        var el = document.getElementById(id);
-        if (el && (window.scrollY + el.getBoundingClientRect().top) <= scrollY) {
-          current = id;
-          break;
-        }
-      }
-      if (current === lastActiveId) return;
-      lastActiveId = current;
-      document.querySelectorAll('.toc-item').forEach(function (item) {
-        item.classList.toggle('active', item.dataset.id === current);
-      });
-      if (current && !scrollFollowPaused) {
-        expandPathForId(current);
-        var activeItem = document.querySelector('.toc-item[data-id="' + current + '"]');
-        if (activeItem) activeItem.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-      }
-    };
-    window.addEventListener('scroll', onScroll, { passive: true });
-    setTimeout(onScroll, 500);
-  }
-
-  function expandPathForId(nodeId) {
-    var path = getNodePath(nodeId);
-    path.forEach(function (id) {
-      var item = document.querySelector('.toc-item[data-id="' + id + '"]');
-      if (item) {
-        var childContainer = item.nextElementSibling;
-        if (childContainer && childContainer.classList.contains('toc-children') && childContainer.classList.contains('collapsed')) {
-          childContainer.classList.remove('collapsed');
-          var btn = item.querySelector('.toc-collapse-btn');
-          if (btn) btn.classList.remove('collapsed');
-        }
-      }
-    });
-  }
-
-  // ─── 主题管理 ─────────────────────────────────────────────────────────────────
-  function setTheme(mode, persist) {
-    var panel = document.getElementById(PANEL_ID);
-    var toggleBtn = document.getElementById('toc-theme-btn');
-    if (!panel || !toggleBtn) return;
-    var isDark;
-    if (mode === 'auto') {
-      isDark = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) || false;
-    } else {
-      isDark = mode === 'dark';
-    }
-    panel.setAttribute('colorscheme', isDark ? 'dark' : 'light');
-    toggleBtn.textContent = isDark ? '\u2600\uFE0F' : '\uD83C\uDF19';
-    if (persist !== false) GM_setValue(THEME_KEY, mode);
-  }
-
-  function cycleTheme() {
-    var current = GM_getValue(THEME_KEY, 'auto');
-    var modes = ['auto', 'light', 'dark'];
-    var next = modes[(modes.indexOf(current) + 1) % modes.length];
-    setTheme(next);
-    showToast(next === 'auto' ? '\u4E3B\u9898: \u8DDF\u968F\u7CFB\u7EDF' : next === 'light' ? '\u4E3B\u9898: \u4EAE\u8272' : '\u4E3B\u9898: \u6697\u8272');
-  }
-
-  function initThemeListener() {
-    if (!window.matchMedia) return;
-    var mql = window.matchMedia('(prefers-color-scheme: dark)');
-    if (mql.addEventListener) mql.addEventListener('change', function () {
-      if (GM_getValue(THEME_KEY, 'auto') === 'auto') setTheme('auto', false);
-    });
-  }
-
-  // ─── 排除域名管理 ──────────────────────────────────────────────────────────────
-  function getExcludedDomains() {
-    return GM_getValue(EXCLUDED_DOMAINS_KEY, []);
-  }
-  function addExcludedDomain(domain) {
-    var list = getExcludedDomains();
-    if (list.indexOf(domain) === -1) { list.push(domain); GM_setValue(EXCLUDED_DOMAINS_KEY, list); }
-  }
-  function removeExcludedDomain(domain) {
-    var list = getExcludedDomains();
-    list = list.filter(function (d) { return d !== domain; });
-    GM_setValue(EXCLUDED_DOMAINS_KEY, list);
-  }
-  function isDomainExcluded() {
-    var domain = location.hostname;
-    return getExcludedDomains().indexOf(domain) !== -1;
-  }
-  function getSiteVisibleKey() {
-    return SITE_VISIBLE_KEY + location.hostname;
-  }
-
-  // ─── 菜单命令 ─────────────────────────────────────────────────────────────────
-  function initMenu() {
-    if (typeof GM_registerMenuCommand !== 'function') return;
-    
-    var excluded = isDomainExcluded();
-    var toggleCommandName = excluded ? '✅ 启用本站目录 (移除排除)' : '❌ 禁用本站目录 (加入排除)';
-    
-    GM_registerMenuCommand(toggleCommandName, function () {
-      if (excluded) {
-        removeExcludedDomain(location.hostname);
-        showToast('已启用本站目录，即将刷新页面');
-      } else {
-        addExcludedDomain(location.hostname);
-        showToast('已禁用本站目录，即将刷新页面');
-      }
-      setTimeout(function() { location.reload(); }, 1000);
-    });
-
-    if (excluded) return;
-
-    GM_registerMenuCommand('\u4E3B\u9898: \u8DDF\u968F\u7CFB\u7EDF', function () { setTheme('auto'); });
-    GM_registerMenuCommand('\u4E3B\u9898: \u4EAE\u8272', function () { setTheme('light'); });
-    GM_registerMenuCommand('\u4E3B\u9898: \u6697\u8272', function () { setTheme('dark'); });
-    GM_registerMenuCommand('\u5237\u65B0\u76EE\u5F55', refreshHeadings);
-  }
-
-  // ─── 悬浮按钮拖拽 ───────────────────────────────────────────────────────────
-  function enableToggleDrag(btn) {
-    var dragging = false, hasMoved = false, startX = 0, startY = 0, startTop = 0;
-    var savedPos = GM_getValue(TOGGLE_POS_KEY, null);
-    if (savedPos) {
-      var top = parseInt(savedPos.top);
-      if (!isNaN(top) && top >= 0 && top <= window.innerHeight) {
-        btn.style.top = savedPos.top + 'px';
-        btn.style.right = savedPos.right + 'px';
-      }
-    }
-    btn.addEventListener('mousedown', function (e) {
-      dragging = true; hasMoved = false;
-      startX = e.clientX; startY = e.clientY;
-      startTop = btn.getBoundingClientRect().top;
-      btn.classList.add('dragging');
-      e.preventDefault();
-    });
-    document.addEventListener('mousemove', function (e) {
-      if (!dragging) return;
-      var dx = e.clientX - startX, dy = e.clientY - startY;
-      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) hasMoved = true;
-      if (!hasMoved) return;
-      btn.style.top = Math.max(0, Math.min(window.innerHeight - btn.offsetHeight, startTop + dy)) + 'px';
-      btn.style.transform = 'none';
-    });
-    document.addEventListener('mouseup', function () {
-      if (!dragging) return;
-      dragging = false;
-      btn.classList.remove('dragging');
-      if (hasMoved) {
-        btn.classList.add('was-dragged');
-        GM_setValue(TOGGLE_POS_KEY, { top: btn.style.top, right: btn.style.right });
-      }
-    });
-  }
-
-  // ─── 初始化 ────────────────────────────────────────────────────────────────────
-  function init() {
-    initMenu();
-
-    if (document.getElementById(PANEL_ID)) return;
-    if (isDomainExcluded()) return;
-
-    var panel = buildPanel();
-    var toggle = buildToggleBtn();
-    document.body.appendChild(panel);
-    document.body.appendChild(toggle);
-
-    var savedPos = GM_getValue(POSITION_KEY, null);
-    if (savedPos) {
-      panel.style.left = savedPos.left + 'px';
-      panel.style.top = savedPos.top + 'px';
-      panel.style.right = 'auto';
-    }
-    var savedSize = GM_getValue(SIZE_KEY, null);
-    if (savedSize) {
-      if (savedSize.width) panel.style.width = savedSize.width;
-      if (savedSize.height) panel.style.height = savedSize.height;
-    }
-    var siteKey = getSiteVisibleKey();
-    var visible = GM_getValue(siteKey, null);
-    if (visible === null) visible = true; 
-    if (!visible) {
-      panel.classList.add('hidden');
-      toggle.style.display = ''; 
-    } else {
-      toggle.style.display = 'none'; 
-    }
-
-    refreshHeadings();
-    enableDrag(panel, document.getElementById('toc-drag-handle'));
-    enableResize(panel);
-    setupScrollSpy();
-    setTheme(GM_getValue(THEME_KEY, 'auto'), false);
-    initThemeListener();
-
-    // 绑定锁定跟随按钮事件
-    document.getElementById('toc-lock-btn').addEventListener('click', function (e) {
-      isTocLocked = !isTocLocked;
-      e.target.textContent = isTocLocked ? '\uD83D\uDD12' : '\uD83D\uDD13'; // 切换 🔒 和 🔓
-      e.target.title = isTocLocked ? '已锁定目录跟随' : '解锁目录跟随';
-      showToast(isTocLocked ? '目录跟随已锁定' : '目录跟随已解锁');
-    });
-
-    document.getElementById('toc-refresh-btn').addEventListener('click', refreshHeadings);
-
-    document.getElementById('toc-collapse-btn').addEventListener('click', function () {
-      var allCollapsed = document.querySelectorAll('.toc-children.collapsed').length > 0;
-      document.querySelectorAll('.toc-children').forEach(function (el) { el.classList.toggle('collapsed', !allCollapsed); });
-      document.querySelectorAll('.toc-collapse-btn').forEach(function (btn) {
-        if (!btn.classList.contains('empty')) btn.classList.toggle('collapsed', !allCollapsed);
-      });
-      showToast(allCollapsed ? '\u5DF2\u5168\u90E8\u5C55\u5F00' : '\u5DF2\u5168\u90E8\u6298\u53E0');
-    });
-
-    document.getElementById('toc-theme-btn').addEventListener('click', cycleTheme);
-
-    document.getElementById('toc-close-btn').addEventListener('click', function () {
-      panel.classList.add('hidden');
-      toggle.style.display = '';
-      GM_setValue(siteKey, false);
-    });
-
-    var headerEl = document.getElementById('toc-drag-handle');
-    headerEl.addEventListener('dblclick', function (e) {
-      if (e.target.closest('.toc-btn')) return;
-      panel.classList.add('hidden');
-      toggle.style.display = '';
-      GM_setValue(siteKey, false);
-    });
-
-    toggle.addEventListener('click', function () {
-      if (toggle.classList.contains('was-dragged')) { toggle.classList.remove('was-dragged'); return; }
-      panel.classList.remove('hidden');
-      toggle.style.display = 'none';
-      GM_setValue(siteKey, true);
-      refreshHeadings();
-    });
-
-    enableToggleDrag(toggle);
-
-    var lastUrl = location.href;
-    new MutationObserver(function () {
-      if (location.href !== lastUrl) { lastUrl = location.href; setTimeout(refreshHeadings, 800); }
-    }).observe(document.body, { childList: true, subtree: true });
-  }
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
-  } else {
-    init();
-  }
-
-})();
