@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         网页目录阅读器 (TOC Reader)
 // @namespace    https://github.com/JBC-JJM/chrome-toc-extension
-// @version      1.7.0
+// @version      1.7.1
 // @description  自动提取网页标题结构，生成悬浮目录面板，支持点击跳转、折叠展开、拖拽移动、智能主题
 // @author       JBC-JJM
 // @match        *://*/*
@@ -27,6 +27,7 @@
   const SIZE_KEY = 'toc_reader_size';
   const TOGGLE_POS_KEY = 'toc_reader_toggle_pos';
   const SITE_VISIBLE_KEY = 'toc_reader_site_visible_';
+  const SCRIPT_VERSION = '1.7.1';
   const EXCLUDED_DOMAINS_KEY = 'toc_reader_excluded_domains';
 
   // ─── 站点特定配置 ────────────────────────────────────────────────────────────
@@ -371,8 +372,19 @@
     var nodes = Array.from(root.querySelectorAll('h1, h2, h3, h4, h5, h6'));
     return nodes.filter(function (el) {
       var text = getHeadingText(el);
-      return text.length > 0 && text.length < 300;
-    });
+      return isValidHeadingText(text) && text.length < 300;
+    });  function isValidHeadingText(text) {
+    if (!text || text.length < 2) return false;
+    var lower = text.toLowerCase();
+    if (lower === 'text/html' || lower === 'undefined' || lower === 'null' || lower === 'nan') return false;
+    if (lower === 'loading...' || lower === 'loading') return false;
+    if (/\.(png|jpg|jpeg|gif|svg|webp|ico|css|js|json|xml|html?)$/i.test(text)) return false;
+    var inv = (text.match(/[\x00-\x08\x0B\x0C\x0E-\x1F\u200b\ufeff]/g) || []).length;
+    if (inv / text.length > 0.3) return false;
+    return true;
+  }
+
+
   }
 
   // 获取标题文本，兼容沉浸式翻译等插件
@@ -430,18 +442,34 @@
     return el.id;
   }
 
-  function getScrollOffset() {
-    var config = getSiteConfig();
-    return (config && config.scrollSmoothOffset) || 0;
+  // 检测页面顶部固定元素高度（如固定导航栏）
+  function getFixedHeaderHeight() {
+    var hdr = document.querySelector('header');
+    if (hdr) {
+      var st = window.getComputedStyle(hdr);
+      if (st.position === 'fixed' || st.position === 'sticky') return hdr.offsetHeight || 0;
+    }
+    var els = document.querySelectorAll('*'), max = 0;
+    for (var i = 0; i < els.length; i++) {
+      var el = els[i];
+      var r = el.getBoundingClientRect();
+      if (r.top < 60 && r.height > 20 && r.width > 100) {
+        var s = window.getComputedStyle(el);
+        if (s.position === 'fixed' || s.position === 'sticky') max = Math.max(max, r.height);
+      }
+    }
+    return max;
   }
 
   function scrollToHeading(id) {
     var el = document.getElementById(id);
     if (!el) return;
-    var offset = getScrollOffset();
+    var config = getSiteConfig();
+    var extra = (config && config.scrollSmoothOffset) || 0;
+    var fh = getFixedHeaderHeight();
     var rect = el.getBoundingClientRect();
-    var scrollTop = window.scrollY + rect.top + offset;
-    window.scrollTo({ top: scrollTop, behavior: 'smooth' });
+    var scrollTop = window.scrollY + rect.top + extra - fh - 10;
+    window.scrollTo({ top: Math.max(0, scrollTop), behavior: 'smooth' });
   }
 
   // ─── 构建面板 ─────────────────────────────────────────────────────────────────
