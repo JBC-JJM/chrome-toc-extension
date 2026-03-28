@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         网页目录阅读器 (TOC Reader) 
 // @namespace    https://github.com/JBC-JJM/chrome-toc-extension
-// @version      1.9.0
-// @description  自动提取网页标题结构，生成悬浮目录面板，支持点击跳转、折叠展开、拖拽移动、智能主题、独立记忆位置大小、文本格式统一隔离
+// @version      1.9.1
+// @description  自动提取网页标题结构，生成悬浮目录面板，支持点击跳转、折叠展开、拖拽移动、智能主题、独立记忆位置大小、文本格式统一隔离、智能隐藏、SPA单页适配
 // @author       JBC-JJM
 // @match        *://*/*
 // @grant        GM_addStyle
@@ -26,7 +26,7 @@
   const SIZE_KEY = 'toc_reader_size';
   const TOGGLE_POS_KEY = 'toc_reader_toggle_pos';
   const SITE_VISIBLE_KEY = 'toc_reader_site_visible_';
-  const SCRIPT_VERSION = '1.9.0';
+  const SCRIPT_VERSION = '1.9.1';
   const EXCLUDED_DOMAINS_KEY = 'toc_reader_excluded_domains';
 
   // ─── 动态存储键（针对当前域名独立记录） ───────────────────────────────────────────
@@ -628,8 +628,14 @@
     return findParent(treeData, nodeId, []) || [nodeId];
   }
 
+  // 🌟 核心修复1：重构刷新和强制隐藏逻辑
   function refreshHeadings() {
     var headings = getHeadings();
+    var panel = document.getElementById(PANEL_ID);
+    var toggle = document.getElementById(TOGGLE_ID);
+    
+    if (!panel || !toggle) return;
+
     headingData = headings.map(function (el, idx) {
       return {
         level: parseInt(el.tagName[1]),
@@ -638,10 +644,27 @@
         el: el
       };
     });
-    renderToc();
-    var panel = document.getElementById(PANEL_ID);
-    if (headingData.length === 0 && panel && !panel.classList.contains('hidden')) {
+
+    // 少于等于 1 个标题时，面板和按钮全部强制隐藏
+    if (headingData.length <= 1) {
       panel.classList.add('hidden');
+      toggle.style.display = 'none';
+      return;
+    }
+
+    renderToc();
+
+    // 标题充足时，判断用户设定的展开/折叠状态
+    var siteKey = getSiteVisibleKey();
+    var visible = GM_getValue(siteKey, null);
+    if (visible === null) visible = true; // 默认展开面板
+
+    if (!visible) {
+      panel.classList.add('hidden');
+      toggle.style.display = ''; // 显示悬浮按钮（恢复默认 inline-block）
+    } else {
+      panel.classList.remove('hidden');
+      toggle.style.display = 'none'; // 隐藏悬浮按钮
     }
   }
 
@@ -864,6 +887,10 @@
 
     var panel = buildPanel();
     var toggle = buildToggleBtn();
+    
+    // 默认给 toggle 加上隐藏，这样在未加载完时不会闪烁出现
+    toggle.style.display = 'none';
+    
     document.body.appendChild(panel);
     document.body.appendChild(toggle);
 
@@ -880,17 +907,9 @@
       if (savedSize.height) panel.style.height = savedSize.height;
     }
 
-    var siteKey = getSiteVisibleKey();
-    var visible = GM_getValue(siteKey, null);
-    if (visible === null) visible = true;
-    if (!visible) {
-      panel.classList.add('hidden');
-      toggle.style.display = '';
-    } else {
-      toggle.style.display = 'none';
-    }
-
+    // 初始化时交由 refreshHeadings 控制面板显示隐藏逻辑
     refreshHeadings();
+    
     enableDrag(panel, document.getElementById('toc-drag-handle'));
     enableResize(panel);
     setupScrollSpy();
@@ -902,7 +921,7 @@
       addExcludedDomain(location.hostname);
       document.getElementById(PANEL_ID).remove();
       document.getElementById(TOGGLE_ID).remove();
-      showToast('\u5DF2\u7981\u6B62\u5728\u672C\u7AD9\u542F\u7528\uFF0C\u53EF\u901A\u8FC7\u83DC\u5355\u6062\u590D'); // 显示提示：已禁止在本站启用...
+      showToast('\u5DF2\u7981\u6B62\u5728\u672C\u7AD9\u542F\u7528\uFF0C\u53EF\u901A\u8FC7\u83DC\u5355\u6062\u590D');
     });
 
     document.getElementById('toc-refresh-btn').addEventListener('click', refreshHeadings);
@@ -918,6 +937,7 @@
 
     document.getElementById('toc-theme-btn').addEventListener('click', cycleTheme);
 
+    var siteKey = getSiteVisibleKey();
     document.getElementById('toc-close-btn').addEventListener('click', function () {
       panel.classList.add('hidden');
       toggle.style.display = '';
@@ -942,9 +962,38 @@
 
     enableToggleDrag(toggle);
 
+    // 🌟 核心修复2：全方位 SPA 路由劫持（专治 GitHub 的局部刷新）
+    var handleSPA = function() {
+      // 局部刷新需要时间渲染 DOM，所以设定延迟拉取
+      setTimeout(refreshHeadings, 800);
+      setTimeout(refreshHeadings, 2000); // 慢网兜底
+    };
+
+    // GitHub 和部分现代网站的专属事件
+    document.addEventListener("turbo:render", handleSPA);
+    document.addEventListener("turbo:load", handleSPA);
+    document.addEventListener("pjax:end", handleSPA);
+
+    // 通用 History 路由劫持
+    var originalPushState = history.pushState;
+    history.pushState = function() {
+        originalPushState.apply(this, arguments);
+        handleSPA();
+    };
+    var originalReplaceState = history.replaceState;
+    history.replaceState = function() {
+        originalReplaceState.apply(this, arguments);
+        handleSPA();
+    };
+    window.addEventListener('popstate', handleSPA);
+
+    // 经典 MutationObserver 备用
     var lastUrl = location.href;
     new MutationObserver(function () {
-      if (location.href !== lastUrl) { lastUrl = location.href; setTimeout(refreshHeadings, 800); }
+      if (location.href !== lastUrl) { 
+        lastUrl = location.href; 
+        handleSPA();
+      }
     }).observe(document.body, { childList: true, subtree: true });
   }
 
